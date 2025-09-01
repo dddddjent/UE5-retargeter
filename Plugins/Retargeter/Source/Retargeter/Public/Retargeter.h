@@ -5,6 +5,10 @@
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
 
+class UObject;
+class UAnimSequence;
+class USkeletalMesh;
+
 /**
  * Main retargeter module class
  */
@@ -16,9 +20,25 @@ public:
 
     static FRetargeterModule& Get();
 
+    void SetPersistAssets(bool bInPersist);
+    bool GetPersistAssets() const;
+
+    void RetargetAPair(const FString& InputFbx, const FString& TargetFbx, const FString& OutputPath);
+
 private:
     void RegisterMenus();
     void PluginButtonClicked();
 
+    void ClearAssetsInPath(const FString& Path);
+    TArray<UObject*> ImportFBX(const FString& FbxPath, const FString& DestinationPath);
+    void ProcessImportedAssets(const TArray<UObject*>& ImportedAssets, bool bIsInput);
+    void loadFBX(const FString& InputFbx, const FString& TargetFbx);
+
     static FRetargeterModule* SingletonInstance;
+
+    bool bPersistAssets = false;
+
+    UAnimSequence* InputAnimation;
+    USkeletalMesh* InputSkeleton;
+    USkeletalMesh* TargetSkeleton;
 };

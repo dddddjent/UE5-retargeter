@@ -1,18 +1,16 @@
 #include "RetargetAPairCommandlet.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformMisc.h"
-#include "HAL/PlatformOutputDevices.h"
-#include "HAL/PlatformProcess.h"
-#include "Misc/Guid.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
+#include "Retargeter.h"
 
 // Define a dedicated log category for this plugin/commandlet
 DEFINE_LOG_CATEGORY_STATIC(Retargeter, Log, All);
 
 URetargetAPairCommandlet::URetargetAPairCommandlet() { LogToConsole = false; }
 // Helper: parse and validate command-line args. Returns 0 on success or an error code (>0).
-static int32 ParseArgs(const FString& Params, FString& OutInputFbx, FString& OutTargetFbx, FString& OutOutputPath)
+static int32 ParseArgs(const FString& Params, FString& OutInputFbx, FString& OutTargetFbx, FString& OutOutputPath, bool& bOutPersist)
 {
     // Parse required arguments: -input=<path> -target=<path> -output=<path>
     if (!FParse::Value(*Params, TEXT("input="), OutInputFbx) || OutInputFbx.IsEmpty()) {
@@ -77,6 +75,14 @@ static int32 ParseArgs(const FString& Params, FString& OutInputFbx, FString& Out
         }
     }
 
+    // Optional: -persist=true|false controls clearing/saving to disk. Default false.
+    FString PersistStr;
+    bOutPersist = false;
+    if (FParse::Value(*Params, TEXT("persist="), PersistStr)) {
+        PersistStr = PersistStr.ToLower();
+        bOutPersist = (PersistStr == TEXT("1") || PersistStr == TEXT("true") || PersistStr == TEXT("yes"));
+    }
+
     return 0;
 }
 
@@ -85,14 +91,17 @@ int32 URetargetAPairCommandlet::Main(const FString& Params)
     UE_LOG(Retargeter, Display, TEXT("---Retargeting a pair of animations---"));
 
     FString InputFbx, TargetFbx, OutputPath;
-    const int32 ParseResult = ParseArgs(Params, InputFbx, TargetFbx, OutputPath);
+    bool bPersist = false;
+    const int32 ParseResult = ParseArgs(Params, InputFbx, TargetFbx, OutputPath, bPersist);
     if (ParseResult != 0) {
         return ParseResult;
     }
 
     UE_LOG(Retargeter, Display, TEXT("Arguments validated. Proceeding with retargeting..."));
 
-    // TODO: implement the retargeting workflow using InputFbx, TargetFbx, OutputPath.
+    auto retargeter = FRetargeterModule::Get();
+    retargeter.SetPersistAssets(bPersist);
+    retargeter.RetargetAPair(InputFbx, TargetFbx, OutputPath);
 
     return 0;
 }
