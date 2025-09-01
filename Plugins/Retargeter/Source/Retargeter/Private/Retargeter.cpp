@@ -31,6 +31,9 @@
 #include "IKRigEditor/Public/RigEditor/IKRigAutoFBIK.h"
 #include "IKRigEditor/Public/RigEditor/IKRigController.h"
 #include "UObject/SavePackage.h"
+#include "RetargetEditor/IKRetargetFactory.h"
+#include "Retargeter/IKRetargeter.h"
+#include "IKRigEditor/Public/RetargetEditor/IKRetargeterController.h"
 #endif
 
 #define LOCTEXT_NAMESPACE "FRetargeterModule"
@@ -223,6 +226,7 @@ void FRetargeterModule::RetargetAPair(const FString& InputFbx, const FString& Ta
 {
     loadFBX(InputFbx, TargetFbx);
 	createIkRig();
+	createRTG();
 }
 
 void FRetargeterModule::loadFBX(const FString& InputFbx, const FString& TargetFbx)
@@ -324,6 +328,108 @@ void FRetargeterModule::createIkRig()
     GenerateForMesh(TargetSkeleton, TargetIKRig, TEXT("/Game/Animations/tmp/target"));
 
     // Generated rigs are stored in InputIKRig and TargetIKRig members for later use
+}
+
+void FRetargeterModule::createRTG()
+{
+    UE_LOG(Retargeter, Log, TEXT("createRTG called"));
+
+#if WITH_EDITOR
+    if (!InputIKRig || !TargetIKRig) {
+        UE_LOG(Retargeter, Warning, TEXT("createRTG: missing InputIKRig or TargetIKRig"));
+        return;
+    }
+
+    // Build base name from input IKRig
+    FString BaseName = InputIKRig->GetName();
+    if (BaseName.StartsWith(TEXT("IK_"))) {
+        BaseName = BaseName.RightChop(3);
+    }
+
+    FString UniqueAssetName = FString::Printf(TEXT("RTG_%s"), *BaseName);
+
+    // Decide package path - keep consistent with IKRig saving path
+    FString PackagePath = TEXT("/Game/Animations/tmp");
+    FString DesiredPackage = PackagePath / UniqueAssetName;
+
+    const FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+    FString UniquePackageName;
+    AssetToolsModule.Get().CreateUniqueAssetName(DesiredPackage, TEXT(""), UniquePackageName, UniqueAssetName);
+    if (UniquePackageName.EndsWith(UniqueAssetName)) {
+        UniquePackageName = UniquePackageName.LeftChop(UniqueAssetName.Len() + 1);
+    }
+
+    UIKRetargeter* RetargetAsset = nullptr;
+
+    if (bPersistAssets) {
+        // Create via factory so it's a normal saved asset
+        UIKRetargetFactory* Factory = NewObject<UIKRetargetFactory>();
+        UObject* NewAsset = AssetToolsModule.Get().CreateAsset(*UniqueAssetName, *UniquePackageName, nullptr, Factory);
+        RetargetAsset = Cast<UIKRetargeter>(NewAsset);
+    } else {
+        // Create transient retargeter
+        FName AssetFName = MakeUniqueObjectName(GetTransientPackage(), UIKRetargeter::StaticClass(), FName(*UniqueAssetName));
+        RetargetAsset = NewObject<UIKRetargeter>(GetTransientPackage(), AssetFName, RF_Public | RF_Standalone);
+    }
+
+    if (!RetargetAsset) {
+        UE_LOG(Retargeter, Error, TEXT("Failed to create UIKRetargeter asset"));
+        return;
+    }
+
+    // Use controller to assign IKRigs and setup default ops
+    const UIKRetargeterController* Controller = UIKRetargeterController::GetController(RetargetAsset);
+    if (!Controller) {
+        UE_LOG(Retargeter, Error, TEXT("Failed to get UIKRetargeterController"));
+        return;
+    }
+
+    Controller->SetIKRig(ERetargetSourceOrTarget::Source, InputIKRig);
+    Controller->SetIKRig(ERetargetSourceOrTarget::Target, TargetIKRig);
+    Controller->AddDefaultOps();
+
+    // Set preview meshes via controller if available
+    if (InputSkeleton) {
+        Controller->SetPreviewMesh(ERetargetSourceOrTarget::Source, InputSkeleton);
+    }
+    if (TargetSkeleton) {
+        Controller->SetPreviewMesh(ERetargetSourceOrTarget::Target, TargetSkeleton);
+    }
+
+    // Optionally set the input animation as a preview (if appropriate API exists)
+    // UIKRetargeter doesn't directly store an animation reference for previewing in this code path.
+
+    if (bPersistAssets) {
+        // Save the package explicitly similar to createIkRig
+        FString LongPackageName = UniquePackageName / UniqueAssetName;
+        FString PackageFileName = FPackageName::LongPackageNameToFilename(LongPackageName, FPackageName::GetAssetPackageExtension());
+
+        UPackage* Package = CreatePackage(*LongPackageName);
+        if (Package) {
+            RetargetAsset->Rename(*RetargetAsset->GetName(), Package);
+            RetargetAsset->SetFlags(RF_Public | RF_Standalone);
+            RetargetAsset->MarkPackageDirty();
+
+            FSavePackageArgs SaveArgs;
+            SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+            SaveArgs.SaveFlags = SAVE_None;
+            SaveArgs.Error = GError;
+            SaveArgs.bForceByteSwapping = false;
+            SaveArgs.bWarnOfLongFilename = false;
+
+            if (UPackage::SavePackage(Package, RetargetAsset, *PackageFileName, SaveArgs)) {
+                UE_LOG(Retargeter, Log, TEXT("Saved IK Retargeter asset to %s"), *PackageFileName);
+                FAssetRegistryModule::AssetCreated(RetargetAsset);
+            } else {
+                UE_LOG(Retargeter, Error, TEXT("Failed to save IK Retargeter asset: %s"), *PackageFileName);
+            }
+        }
+    } else {
+        UE_LOG(Retargeter, Verbose, TEXT("Created transient IK Retargeter: %s"), *RetargetAsset->GetName());
+    }
+#else
+    UE_LOG(Retargeter, Warning, TEXT("createRTG is editor-only and not available in this build"));
+#endif
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -37,6 +37,8 @@ private:
 
     void createIkRig();
 
+    void createRTG();
+
     static FRetargeterModule* SingletonInstance;
 
     bool bPersistAssets = false;
