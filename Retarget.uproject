@@ -1,0 +1,22 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "760A5C5D-E7C9-42D7-A044-E0FA422CB9F5",
+	"Category": "",
+	"Description": "",
+	"Modules": [
+		{
+			"Name": "Retarget",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "ModelingToolsEditorMode",
+			"Enabled": true,
+			"TargetAllowList": [
+				"Editor"
+			]
+		}
+	]
+}
