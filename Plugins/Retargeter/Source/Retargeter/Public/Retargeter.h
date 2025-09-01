@@ -8,6 +8,7 @@
 class UObject;
 class UAnimSequence;
 class USkeletalMesh;
+class UIKRigDefinition;
 
 /**
  * Main retargeter module class
@@ -34,6 +35,8 @@ private:
     void ProcessImportedAssets(const TArray<UObject*>& ImportedAssets, bool bIsInput);
     void loadFBX(const FString& InputFbx, const FString& TargetFbx);
 
+    void createIkRig();
+
     static FRetargeterModule* SingletonInstance;
 
     bool bPersistAssets = false;
@@ -41,4 +44,7 @@ private:
     UAnimSequence* InputAnimation;
     USkeletalMesh* InputSkeleton;
     USkeletalMesh* TargetSkeleton;
+    // Generated IKRig assets (transient or saved depending on persist flag)
+    UIKRigDefinition* InputIKRig = nullptr;
+    UIKRigDefinition* TargetIKRig = nullptr;
 };

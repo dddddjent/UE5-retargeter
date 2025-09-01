@@ -18,11 +18,20 @@
 #include "AssetRegistry/IAssetRegistry.h"
 #include "AssetToolsModule.h"
 #include "AutomatedAssetImportData.h"
-#include "Engine/SkeletalMesh.h"
 #include "Engine/Level.h"
+#include "Engine/SkeletalMesh.h"
 #include "FileHelpers.h"
 #include "IAssetTools.h"
 #include "ObjectTools.h"
+
+#if WITH_EDITOR
+// IKRig editor/public headers
+#include "IKRig/Public/Rig/IKRigDefinition.h"
+#include "IKRigEditor/Public/RigEditor/IKRigAutoCharacterizer.h"
+#include "IKRigEditor/Public/RigEditor/IKRigAutoFBIK.h"
+#include "IKRigEditor/Public/RigEditor/IKRigController.h"
+#include "UObject/SavePackage.h"
+#endif
 
 #define LOCTEXT_NAMESPACE "FRetargeterModule"
 
@@ -43,10 +52,7 @@ void FRetargeterModule::SetPersistAssets(bool bInPersist)
     UE_LOG(Retargeter, Log, TEXT("PersistAssets=%s"), bPersistAssets ? TEXT("true") : TEXT("false"));
 }
 
-bool FRetargeterModule::GetPersistAssets() const
-{
-    return bPersistAssets;
-}
+bool FRetargeterModule::GetPersistAssets() const { return bPersistAssets; }
 
 void FRetargeterModule::StartupModule()
 {
@@ -116,7 +122,8 @@ void FRetargeterModule::ClearAssetsInPath(const FString& Path)
         UE_LOG(Retargeter, Verbose, TEXT("Skipping clear of %s (in-memory mode)"), *Path);
         return;
     }
-    FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+    FAssetRegistryModule& AssetRegistryModule
+        = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
     TArray<FAssetData> AssetsToDelete;
     AssetRegistryModule.Get().ScanPathsSynchronous({ Path }, /*bForceRescan*/ true);
     AssetRegistryModule.Get().GetAssetsByPath(FName(*Path), AssetsToDelete, true);
@@ -138,8 +145,10 @@ void FRetargeterModule::ClearAssetsInPath(const FString& Path)
                 }
             }
             if (ObjectsToForceDelete.Num() > 0) {
-                UE_LOG(Retargeter, Warning, TEXT("Force deleting %d remaining assets under %s"), ObjectsToForceDelete.Num(), *Path);
-                const int32 NumForceDeleted = ObjectTools::ForceDeleteObjects(ObjectsToForceDelete, /*ShowConfirmation=*/false);
+                UE_LOG(Retargeter, Warning, TEXT("Force deleting %d remaining assets under %s"),
+                    ObjectsToForceDelete.Num(), *Path);
+                const int32 NumForceDeleted
+                    = ObjectTools::ForceDeleteObjects(ObjectsToForceDelete, /*ShowConfirmation=*/false);
                 UE_LOG(Retargeter, Log, TEXT("ForceDeleteObjects removed %d assets from %s"), NumForceDeleted, *Path);
             }
         }
@@ -182,11 +191,11 @@ void FRetargeterModule::ProcessImportedAssets(const TArray<UObject*>& ImportedAs
             const bool bOnlyDirty = true;
             const bool bSaved = UEditorLoadingAndSavingUtils::SavePackages(PackagesToSave, bOnlyDirty);
             UE_LOG(Retargeter, Log, TEXT("Saved %d %s packages (result=%s)"), PackagesToSave.Num(),
-                bIsInput ? TEXT("input") : TEXT("target"),
-                bSaved ? TEXT("true") : TEXT("false"));
+                bIsInput ? TEXT("input") : TEXT("target"), bSaved ? TEXT("true") : TEXT("false"));
         }
     } else {
-        UE_LOG(Retargeter, Verbose, TEXT("Skipping save of %s assets (in-memory mode)"), bIsInput ? TEXT("input") : TEXT("target"));
+        UE_LOG(Retargeter, Verbose, TEXT("Skipping save of %s assets (in-memory mode)"),
+            bIsInput ? TEXT("input") : TEXT("target"));
     }
 #endif
 
@@ -200,7 +209,8 @@ void FRetargeterModule::ProcessImportedAssets(const TArray<UObject*>& ImportedAs
                 TargetSkeleton = SkeletalMesh;
                 UE_LOG(Retargeter, Log, TEXT("Imported target skeletal mesh: %s"), *SkeletalMesh->GetName());
             }
-            if (!bIsInput) break; // For target, only need one
+            if (!bIsInput)
+                break; // For target, only need one
         } else if (bIsInput && Cast<UAnimSequence>(Asset)) {
             UAnimSequence* AnimSeq = Cast<UAnimSequence>(Asset);
             InputAnimation = AnimSeq;
@@ -212,6 +222,7 @@ void FRetargeterModule::ProcessImportedAssets(const TArray<UObject*>& ImportedAs
 void FRetargeterModule::RetargetAPair(const FString& InputFbx, const FString& TargetFbx, const FString& OutputPath)
 {
     loadFBX(InputFbx, TargetFbx);
+	createIkRig();
 }
 
 void FRetargeterModule::loadFBX(const FString& InputFbx, const FString& TargetFbx)
@@ -229,6 +240,90 @@ void FRetargeterModule::loadFBX(const FString& InputFbx, const FString& TargetFb
     // Import target FBX
     TArray<UObject*> TargetAssets = ImportFBX(TargetFbx, TEXT("/Game/Animations/tmp/target"));
     ProcessImportedAssets(TargetAssets, false);
+}
+
+void FRetargeterModule::createIkRig()
+{
+    UE_LOG(Retargeter, Log, TEXT("createIkRig called"));
+
+    // Clear any existing generated rigs
+    InputIKRig = nullptr;
+    TargetIKRig = nullptr;
+
+    // Need skeletons to operate
+    if (!InputSkeleton && !TargetSkeleton) {
+        UE_LOG(Retargeter, Warning, TEXT("No input or target skeleton available for IK rig generation"));
+        return;
+    }
+
+    // Helper lambda to create and optionally save an IKRigDefinition for a skeletal mesh
+    auto GenerateForMesh = [&](USkeletalMesh* Mesh, UIKRigDefinition*& OutIKRig, const FString& PackagePath) -> void {
+        if (!Mesh)
+            return;
+
+        // Create transient IKRig asset
+        FName AssetName = MakeUniqueObjectName(GetTransientPackage(), UIKRigDefinition::StaticClass(),
+            FName("AutoIKRig"), EUniqueObjectNameOptions::GloballyUnique);
+        OutIKRig = NewObject<UIKRigDefinition>(GetTransientPackage(), AssetName, RF_Public | RF_Standalone);
+
+        const UIKRigController* Controller = UIKRigController::GetController(OutIKRig);
+        if (!Controller) {
+            UE_LOG(Retargeter, Error, TEXT("Failed to get UIKRigController"));
+            return;
+        }
+
+        // Assign the skeletal mesh as preview/working mesh
+        Controller->SetSkeletalMesh(Mesh);
+
+        // Auto-generate retarget chains and FBIK
+        FAutoCharacterizeResults CharacterizationResults;
+        Controller->AutoGenerateRetargetDefinition(CharacterizationResults);
+        Controller->SetRetargetDefinition(CharacterizationResults.AutoRetargetDefinition.RetargetDefinition);
+        FAutoFBIKResults IKResults;
+        Controller->AutoGenerateFBIK(IKResults);
+
+        // Set preview mesh on the asset so editor shows it
+        OutIKRig->SetPreviewMesh(Mesh);
+
+        if (bPersistAssets) {
+#if WITH_EDITOR
+            // Create package and save asset under the requested path (/Game/...)
+            FString LongPackageName = PackagePath + TEXT("/") + OutIKRig->GetName();
+            FString PackageFileName
+                = FPackageName::LongPackageNameToFilename(LongPackageName, FPackageName::GetAssetPackageExtension());
+
+            UPackage* Package = CreatePackage(*LongPackageName);
+            if (Package) {
+                OutIKRig->Rename(*OutIKRig->GetName(), Package);
+                OutIKRig->SetFlags(RF_Public | RF_Standalone);
+                OutIKRig->MarkPackageDirty();
+
+                FSavePackageArgs SaveArgs;
+                SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+                SaveArgs.SaveFlags = SAVE_None;
+                SaveArgs.Error = GError;
+                SaveArgs.bForceByteSwapping = false;
+                SaveArgs.bWarnOfLongFilename = false;
+
+                if (UPackage::SavePackage(Package, OutIKRig, *PackageFileName, SaveArgs)) {
+                    UE_LOG(Retargeter, Log, TEXT("Saved IKRig asset to %s"), *PackageFileName);
+                    // Update asset registry
+                    FAssetRegistryModule::AssetCreated(OutIKRig);
+                } else {
+                    UE_LOG(Retargeter, Error, TEXT("Failed to save IKRig asset: %s"), *PackageFileName);
+                }
+            }
+#else
+            UE_LOG(Retargeter, Warning, TEXT("Persist requested but editor-only save not available in this build"));
+#endif
+        }
+    };
+
+    // Generate for both skeletons
+    GenerateForMesh(InputSkeleton, InputIKRig, TEXT("/Game/Animations/tmp/input"));
+    GenerateForMesh(TargetSkeleton, TargetIKRig, TEXT("/Game/Animations/tmp/target"));
+
+    // Generated rigs are stored in InputIKRig and TargetIKRig members for later use
 }
 
 #undef LOCTEXT_NAMESPACE
