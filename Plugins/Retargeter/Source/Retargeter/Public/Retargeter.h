@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
+#include "Retargeter/IKRetargeter.h"
 
 class UObject;
 class UAnimSequence;
@@ -39,6 +40,8 @@ private:
 
     void createRTG();
 
+    void retargetWithRTG();
+
     static FRetargeterModule* SingletonInstance;
 
     bool bPersistAssets = false;
@@ -46,7 +49,9 @@ private:
     UAnimSequence* InputAnimation;
     USkeletalMesh* InputSkeleton;
     USkeletalMesh* TargetSkeleton;
-    // Generated IKRig assets (transient or saved depending on persist flag)
+
     UIKRigDefinition* InputIKRig = nullptr;
     UIKRigDefinition* TargetIKRig = nullptr;
+
+    UIKRetargeter* IKRetargeter = nullptr;
 };

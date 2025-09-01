@@ -376,6 +376,7 @@ void FRetargeterModule::createRTG()
         UE_LOG(Retargeter, Error, TEXT("Failed to create UIKRetargeter asset"));
         return;
     }
+	IKRetargeter = RetargetAsset;
 
     // Use controller to assign IKRigs and setup default ops
     const UIKRetargeterController* Controller = UIKRetargeterController::GetController(RetargetAsset);
