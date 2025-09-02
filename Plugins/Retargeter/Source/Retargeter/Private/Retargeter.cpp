@@ -1,7 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Retargeter.h"
-#include "Logging/LogMacros.h"
 // Editor-only includes
 #if WITH_EDITOR
 #include "Framework/MultiBox/MultiBoxBuilder.h"
