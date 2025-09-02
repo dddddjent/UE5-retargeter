@@ -573,8 +573,6 @@ void FRetargeterModule::createIkRig()
         FAutoCharacterizeResults CharacterizationResults;
         Controller->AutoGenerateRetargetDefinition(CharacterizationResults);
         Controller->SetRetargetDefinition(CharacterizationResults.AutoRetargetDefinition.RetargetDefinition);
-        FAutoFBIKResults IKResults;
-        Controller->AutoGenerateFBIK(IKResults);
 
         // Set preview mesh on the asset so editor shows it
         OutIKRig->SetPreviewMesh(Mesh);
