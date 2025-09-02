@@ -496,6 +496,24 @@ void FRetargeterModule::RetargetAPair(const FString& InputFbx, const FString& Ta
     createRTG();
 	retargetWithRTG();
 	ExportOutputAnimationFBX(OutputPath);
+
+    // Release references to created/imported assets so they can be garbage collected
+    // Clearing member pointers avoids holding onto transient or editor-only assets
+    InputAnimation = nullptr;
+    InputSkeleton = nullptr;
+    TargetSkeleton = nullptr;
+
+    InputIKRig = nullptr;
+    TargetIKRig = nullptr;
+
+    IKRetargeter = nullptr;
+    outputAnimation = nullptr;
+
+    // In commandlet/batch mode, run a GC pass to free transient assets immediately.
+    if (IsRunningCommandlet()) {
+        UE_LOG(Retargeter, Log, TEXT("RetargetAPair: running garbage collection to free transient assets"));
+        CollectGarbage(RF_NoFlags);
+    }
 }
 
 void FRetargeterModule::loadFBX(const FString& InputFbx, const FString& TargetFbx)
