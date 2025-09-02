@@ -43,6 +43,8 @@ private:
 
     void retargetWithRTG();
 
+    void ExportOutputAnimationFBX(const FString& OutputPath);
+
     static FRetargeterModule* SingletonInstance;
 
     bool bPersistAssets = false;

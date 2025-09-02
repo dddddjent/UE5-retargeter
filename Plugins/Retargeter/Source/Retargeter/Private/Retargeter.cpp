@@ -40,6 +40,10 @@
 #include "Retargeter/RetargetOps/RunIKRigOp.h"
 #include "Retargeter/RetargetOps/IKChainsOp.h"
 #include "UObject/SavePackage.h"
+#include "Exporters/AnimSequenceExporterFBX.h"
+#include "AssetExportTask.h"
+#include "Exporters/FbxExportOption.h"
+#include "HAL/FileManager.h"
 #endif
 
 #define LOCTEXT_NAMESPACE "FRetargeterModule"
@@ -501,6 +505,7 @@ void FRetargeterModule::RetargetAPair(const FString& InputFbx, const FString& Ta
     CleanPreviousOutputs();
     createRTG();
 	retargetWithRTG();
+	ExportOutputAnimationFBX(OutputPath);
 }
 
 void FRetargeterModule::loadFBX(const FString& InputFbx, const FString& TargetFbx)
@@ -720,3 +725,45 @@ void FRetargeterModule::createRTG()
 #undef LOCTEXT_NAMESPACE
 
 IMPLEMENT_MODULE(FRetargeterModule, Retargeter)
+
+void FRetargeterModule::ExportOutputAnimationFBX(const FString& OutputPath)
+{
+#if WITH_EDITOR
+    if (!outputAnimation || !TargetSkeleton) {
+        UE_LOG(Retargeter, Warning, TEXT("ExportOutputAnimationFBX: Missing outputAnimation or TargetSkeleton"));
+        return;
+    }
+
+    // Prepare automated export task and options
+    UAnimSequenceExporterFBX* Exporter = NewObject<UAnimSequenceExporterFBX>();
+    Exporter->SetBatchMode(true);
+    Exporter->SetShowExportOption(false);
+
+    FString CleanOutputPath = OutputPath;
+    IFileManager::Get().MakeDirectory(*FPaths::GetPath(CleanOutputPath), /*Tree*/true);
+
+    UFbxExportOption* ExportOptions = NewObject<UFbxExportOption>();
+    ExportOptions->bASCII = false;
+    ExportOptions->BakeMaterialInputs = EFbxMaterialBakeMode::Disabled;
+    // Exporting the preview mesh in commandlet can assert inside CPU skinning/material baking paths.
+    // Only include the mesh when not running as a commandlet.
+    ExportOptions->bExportPreviewMesh = !IsRunningCommandlet();
+
+    UAssetExportTask* Task = NewObject<UAssetExportTask>();
+    Task->Object = outputAnimation;
+    Task->Exporter = Exporter;
+    Task->Filename = CleanOutputPath;
+    Task->bSelected = false;
+    Task->bReplaceIdentical = true;
+    Task->bPrompt = false;
+    Task->bAutomated = true;
+    Task->bUseFileArchive = false;
+    Task->bWriteEmptyFiles = false;
+    Task->Options = ExportOptions;
+
+    bool bOk = UExporter::RunAssetExportTask(Task);
+    UE_LOG(Retargeter, Log, TEXT("Export FBX %s: %s"), bOk ? TEXT("succeeded") : TEXT("failed"), *CleanOutputPath);
+#else
+    UE_LOG(Retargeter, Warning, TEXT("ExportOutputAnimationFBX is editor-only and not available in this build"));
+#endif
+}

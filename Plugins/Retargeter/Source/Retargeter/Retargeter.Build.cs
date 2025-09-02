@@ -38,6 +38,8 @@ public class Retargeter : ModuleRules
 					"UnrealEd", "AssetRegistry", "AssetTools",
 					"AnimationBlueprintLibrary",
 					"IKRig", "IKRigEditor", "EditorScriptingUtilities",
+					"EditorFramework",
+					"Engine",
 					"ToolMenus", "Slate", "SlateCore"
 				}
 				);
