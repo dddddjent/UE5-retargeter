@@ -222,21 +222,20 @@ void FRetargeterModule::retargetWithRTG()
         }
     }
 
-    // Commit tracks: clear existing bone curves first to avoid stale data
+    // Commit tracks: add only if missing to avoid "track already exists" warnings
     {
-        TArray<FName> ExistingBoneNames;
-        ExistingBoneNames.Reserve(NumTargetBones);
-        for (int32 TBoneIndex = 0; TBoneIndex < NumTargetBones; ++TBoneIndex) {
-            ExistingBoneNames.Add(TargetBoneNames[TBoneIndex]);
+        TArray<FName> ExistingTrackNames;
+        if (const IAnimationDataModel* Model = Ctrl.GetModel()) {
+            Model->GetBoneTrackNames(ExistingTrackNames);
         }
-        // Remove all then re-add to ensure clean state
-        for (const FName& BoneName : ExistingBoneNames) {
-            Ctrl.RemoveBoneTrack(BoneName, bTransact);
-        }
+        TSet<FName> ExistingTrackSet(ExistingTrackNames);
+
         for (int32 TBoneIndex = 0; TBoneIndex < NumTargetBones; ++TBoneIndex) {
             const FName& BoneName = TargetBoneNames[TBoneIndex];
             const FRawAnimSequenceTrack& Raw = BoneTracks[TBoneIndex];
-            Ctrl.AddBoneCurve(BoneName, bTransact);
+            if (!ExistingTrackSet.Contains(BoneName)) {
+                Ctrl.AddBoneCurve(BoneName, bTransact);
+            }
             Ctrl.SetBoneTrackKeys(BoneName, Raw.PosKeys, Raw.RotKeys, Raw.ScaleKeys, bTransact);
         }
     }
@@ -355,11 +354,77 @@ void FRetargeterModule::ClearAssetsInPath(const FString& Path)
                 }
             }
             if (ObjectsToForceDelete.Num() > 0) {
-                UE_LOG(Retargeter, Warning, TEXT("Force deleting %d remaining assets under %s"),
+                UE_LOG(Retargeter, Log, TEXT("Force deleting %d remaining assets under %s"),
                     ObjectsToForceDelete.Num(), *Path);
                 const int32 NumForceDeleted
                     = ObjectTools::ForceDeleteObjects(ObjectsToForceDelete, /*ShowConfirmation=*/false);
                 UE_LOG(Retargeter, Log, TEXT("ForceDeleteObjects removed %d assets from %s"), NumForceDeleted, *Path);
+            }
+        }
+    }
+}
+
+void FRetargeterModule::CleanPreviousOutputs()
+{
+    if (!bPersistAssets) {
+        UE_LOG(Retargeter, Verbose, TEXT("CleanPreviousOutputs: skipped (in-memory mode)"));
+        return;
+    }
+
+    // Clean previously generated transient/persistent outputs under our temp folder.
+    // Keep input/target subfolders intact; only clear assets directly under /Game/Animations/tmp.
+    const FString RootOutputPath = TEXT("/Game/Animations/tmp");
+
+    FAssetRegistryModule& AssetRegistryModule
+        = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+
+    // Force a rescan so we see latest on-disk state
+    AssetRegistryModule.Get().ScanPathsSynchronous({ RootOutputPath }, /*bForceRescan*/ true);
+
+    TArray<FAssetData> AllAssetsUnderRoot;
+    AssetRegistryModule.Get().GetAssetsByPath(FName(*RootOutputPath), AllAssetsUnderRoot, /*bRecursive*/ true);
+
+    if (AllAssetsUnderRoot.Num() == 0) {
+        UE_LOG(Retargeter, Verbose, TEXT("CleanPreviousOutputs: nothing to delete under %s"), *RootOutputPath);
+        return;
+    }
+
+    TArray<FAssetData> AssetsToDelete;
+    AssetsToDelete.Reserve(AllAssetsUnderRoot.Num());
+
+    // Only delete assets whose package path is exactly the root (exclude input/target subfolders)
+    const FName RootPathFName(*RootOutputPath);
+    for (const FAssetData& AssetData : AllAssetsUnderRoot) {
+        if (AssetData.PackagePath == RootPathFName) {
+            AssetsToDelete.Add(AssetData);
+        }
+    }
+
+    if (AssetsToDelete.Num() == 0) {
+        UE_LOG(Retargeter, Verbose, TEXT("CleanPreviousOutputs: no top-level outputs under %s"), *RootOutputPath);
+        return;
+    }
+
+    UE_LOG(Retargeter, Log, TEXT("CleanPreviousOutputs: deleting %d assets under %s"), AssetsToDelete.Num(), *RootOutputPath);
+    const int32 NumDeleted = ObjectTools::DeleteAssets(AssetsToDelete, /*bShowConfirmation=*/false);
+    UE_LOG(Retargeter, Log, TEXT("CleanPreviousOutputs: DeleteAssets removed %d assets"), NumDeleted);
+
+    // In commandlet mode, try to force-delete any remaining assets
+    if (IsRunningCommandlet()) {
+        TArray<FAssetData> Remaining;
+        AssetRegistryModule.Get().ScanPathsSynchronous({ RootOutputPath }, /*bForceRescan*/ true);
+        AssetRegistryModule.Get().GetAssetsByPath(RootPathFName, Remaining, /*bRecursive*/ false);
+        if (Remaining.Num() > 0) {
+            TArray<UObject*> ObjectsToForceDelete;
+            for (const FAssetData& AssetData : Remaining) {
+                if (UObject* Obj = AssetData.GetAsset({ ULevel::LoadAllExternalObjectsTag })) {
+                    ObjectsToForceDelete.Add(Obj);
+                }
+            }
+            if (ObjectsToForceDelete.Num() > 0) {
+                const int32 NumForceDeleted
+                    = ObjectTools::ForceDeleteObjects(ObjectsToForceDelete, /*ShowConfirmation=*/false);
+                UE_LOG(Retargeter, Log, TEXT("CleanPreviousOutputs: ForceDeleteObjects removed %d assets"), NumForceDeleted);
             }
         }
     }
@@ -433,6 +498,7 @@ void FRetargeterModule::RetargetAPair(const FString& InputFbx, const FString& Ta
 {
     loadFBX(InputFbx, TargetFbx);
     createIkRig();
+    CleanPreviousOutputs();
     createRTG();
 	retargetWithRTG();
 }

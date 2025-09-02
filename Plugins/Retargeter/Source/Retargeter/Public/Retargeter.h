@@ -32,6 +32,7 @@ private:
     void PluginButtonClicked();
 
     void ClearAssetsInPath(const FString& Path);
+    void CleanPreviousOutputs();
     TArray<UObject*> ImportFBX(const FString& FbxPath, const FString& DestinationPath);
     void ProcessImportedAssets(const TArray<UObject*>& ImportedAssets, bool bIsInput);
     void loadFBX(const FString& InputFbx, const FString& TargetFbx);
