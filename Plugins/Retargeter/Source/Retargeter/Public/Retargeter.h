@@ -35,13 +35,13 @@ private:
     void CleanPreviousOutputs();
     TArray<UObject*> ImportFBX(const FString& FbxPath, const FString& DestinationPath);
     void ProcessImportedAssets(const TArray<UObject*>& ImportedAssets, bool bIsInput);
-    void loadFBX(const FString& InputFbx, const FString& TargetFbx);
+    void LoadFBX(const FString& InputFbx, const FString& TargetFbx);
 
-    void createIkRig();
+    void CreateIkRig();
 
-    void createRTG();
+    void CreateRTG();
 
-    void retargetWithRTG();
+    void RetargetWithRTG();
 
     void ExportOutputAnimationFBX(const FString& OutputPath);
 

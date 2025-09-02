@@ -83,7 +83,7 @@ void FRetargeterModule::StartupModule()
 #endif
 }
 
-void FRetargeterModule::retargetWithRTG()
+void FRetargeterModule::RetargetWithRTG()
 {
     // Validate inputs
     if (!InputAnimation || !InputSkeleton || !TargetSkeleton || !IKRetargeter) {
@@ -494,10 +494,10 @@ void FRetargeterModule::RetargetAPair(const FString& InputFbx, const FString& Ta
     // to assets from a prior target skeleton when switching FBX files.
     CleanPreviousOutputs();
 
-    loadFBX(InputFbx, TargetFbx);
-    createIkRig();
-    createRTG();
-	retargetWithRTG();
+    LoadFBX(InputFbx, TargetFbx);
+    CreateIkRig();
+    CreateRTG();
+	RetargetWithRTG();
 	ExportOutputAnimationFBX(OutputPath);
 
     // Release references to created/imported assets so they can be garbage collected
@@ -519,7 +519,7 @@ void FRetargeterModule::RetargetAPair(const FString& InputFbx, const FString& Ta
     }
 }
 
-void FRetargeterModule::loadFBX(const FString& InputFbx, const FString& TargetFbx)
+void FRetargeterModule::LoadFBX(const FString& InputFbx, const FString& TargetFbx)
 {
     UE_LOG(Retargeter, Log, TEXT("loadFBX called with Input: %s, Target: %s"), *InputFbx, *TargetFbx);
 
@@ -536,7 +536,7 @@ void FRetargeterModule::loadFBX(const FString& InputFbx, const FString& TargetFb
     ProcessImportedAssets(TargetAssets, false);
 }
 
-void FRetargeterModule::createIkRig()
+void FRetargeterModule::CreateIkRig()
 {
     UE_LOG(Retargeter, Log, TEXT("createIkRig called"));
 
@@ -618,7 +618,7 @@ void FRetargeterModule::createIkRig()
     // Generated rigs are stored in InputIKRig and TargetIKRig members for later use
 }
 
-void FRetargeterModule::createRTG()
+void FRetargeterModule::CreateRTG()
 {
     UE_LOG(Retargeter, Log, TEXT("createRTG called"));
 
