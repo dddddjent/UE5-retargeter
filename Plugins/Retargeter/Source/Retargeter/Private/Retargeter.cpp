@@ -490,9 +490,12 @@ void FRetargeterModule::ProcessImportedAssets(const TArray<UObject*>& ImportedAs
 
 void FRetargeterModule::RetargetAPair(const FString& InputFbx, const FString& TargetFbx, const FString& OutputPath)
 {
+    // Delete any previous retargeted outputs first to avoid dangling references
+    // to assets from a prior target skeleton when switching FBX files.
+    CleanPreviousOutputs();
+
     loadFBX(InputFbx, TargetFbx);
     createIkRig();
-    CleanPreviousOutputs();
     createRTG();
 	retargetWithRTG();
 	ExportOutputAnimationFBX(OutputPath);
