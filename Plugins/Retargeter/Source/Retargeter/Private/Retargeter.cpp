@@ -26,14 +26,20 @@
 
 #if WITH_EDITOR
 // IKRig editor/public headers
+#include "AnimPose.h"
+#include "AnimationBlueprintLibrary.h"
 #include "IKRig/Public/Rig/IKRigDefinition.h"
+#include "IKRigEditor/Public/RetargetEditor/IKRetargeterController.h"
 #include "IKRigEditor/Public/RigEditor/IKRigAutoCharacterizer.h"
 #include "IKRigEditor/Public/RigEditor/IKRigAutoFBIK.h"
 #include "IKRigEditor/Public/RigEditor/IKRigController.h"
-#include "UObject/SavePackage.h"
+#include "RetargetEditor/IKRetargetBatchOperation.h"
 #include "RetargetEditor/IKRetargetFactory.h"
+#include "Retargeter/IKRetargetProcessor.h"
 #include "Retargeter/IKRetargeter.h"
-#include "IKRigEditor/Public/RetargetEditor/IKRetargeterController.h"
+#include "Retargeter/RetargetOps/RunIKRigOp.h"
+#include "Retargeter/RetargetOps/IKChainsOp.h"
+#include "UObject/SavePackage.h"
 #endif
 
 #define LOCTEXT_NAMESPACE "FRetargeterModule"
@@ -71,6 +77,207 @@ void FRetargeterModule::StartupModule()
         UToolMenus::RegisterStartupCallback(
             FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FRetargeterModule::RegisterMenus));
     }
+#endif
+}
+
+void FRetargeterModule::retargetWithRTG()
+{
+    // Validate inputs
+    if (!InputAnimation || !InputSkeleton || !TargetSkeleton || !IKRetargeter) {
+        UE_LOG(Retargeter, Warning, TEXT("retargetWithRTG: missing input(s). Anim=%p InMesh=%p TgtMesh=%p RTG=%p"),
+            InputAnimation, InputSkeleton, TargetSkeleton, IKRetargeter);
+        return;
+    }
+
+#if WITH_EDITOR
+    // Initialize processor with chain retargeting profile from asset
+    FIKRetargetProcessor Processor;
+    FRetargetProfile RetargetProfile;
+    RetargetProfile.FillProfileWithAssetSettings(IKRetargeter);
+
+    Processor.Initialize(InputSkeleton, TargetSkeleton, IKRetargeter, RetargetProfile);
+    if (!Processor.IsInitialized()) {
+        UE_LOG(Retargeter, Error, TEXT("retargetWithRTG: Failed to initialize IK Retargeter processor"));
+        return;
+    }
+
+    // Gather skeleton info
+    const FRetargetSkeleton& TargetRig = Processor.GetSkeleton(ERetargetSourceOrTarget::Target);
+    const TArray<FName>& TargetBoneNames = TargetRig.BoneNames;
+    const int32 NumTargetBones = TargetBoneNames.Num();
+
+    const FRetargetSkeleton& SourceRig = Processor.GetSkeleton(ERetargetSourceOrTarget::Source);
+    const TArray<FName>& SourceBoneNames = SourceRig.BoneNames;
+    const int32 NumSourceBones = SourceBoneNames.Num();
+
+    // Allocate source pose buffer
+    TArray<FTransform> SourceComponentPose;
+    SourceComponentPose.SetNum(NumSourceBones);
+
+    // Create output sequence by duplicating the source sequence (keeps data model intact like editor duplication)
+    UAnimSequence* TargetSequence = nullptr;
+    {
+        FString OutName = FString::Printf(TEXT("%s_RTG"), *InputAnimation->GetName());
+        if (bPersistAssets && InputAnimation->GetOutermost()) {
+            // Duplicate into /Game/Animations/tmp
+            const FString DesiredPath = TEXT("/Game/Animations/tmp");
+            FString UniquePkgName, UniqueAssetName;
+            const FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+            AssetToolsModule.Get().CreateUniqueAssetName(DesiredPath / OutName, TEXT(""), UniquePkgName, UniqueAssetName);
+
+            UPackage* Package = CreatePackage(*UniquePkgName);
+            TargetSequence = DuplicateObject<UAnimSequence>(InputAnimation, Package, *UniqueAssetName);
+            if (TargetSequence) {
+                TargetSequence->SetFlags(RF_Public | RF_Standalone);
+                TargetSequence->SetSkeleton(TargetSkeleton->GetSkeleton());
+                TargetSequence->SetPreviewMesh(TargetSkeleton);
+                TargetSequence->MarkPackageDirty();
+            }
+        } else {
+            // Transient duplicate
+            FName UniqueName = MakeUniqueObjectName(GetTransientPackage(), UAnimSequence::StaticClass(), *OutName);
+            TargetSequence = DuplicateObject<UAnimSequence>(InputAnimation, GetTransientPackage(), UniqueName);
+            if (TargetSequence) {
+                TargetSequence->SetSkeleton(TargetSkeleton->GetSkeleton());
+                TargetSequence->SetPreviewMesh(TargetSkeleton);
+            }
+        }
+    }
+
+    if (!TargetSequence) {
+        UE_LOG(Retargeter, Error, TEXT("retargetWithRTG: Failed to create output UAnimSequence"));
+        return;
+    }
+    // Do not assign to outputAnimation yet; we'll create a copy after baking data
+
+    // Prepare controller for writing keys
+    IAnimationDataController& Ctrl = TargetSequence->GetController();
+    constexpr bool bTransact = false;
+    Ctrl.OpenBracket(FText::FromString("Generating Retargeted Animation Data"), bTransact);
+    Ctrl.NotifyPopulated();
+    Ctrl.UpdateWithSkeleton(TargetSkeleton->GetSkeleton(), bTransact);
+    // For duplicated sequences, the model is already initialized; still ensure frame rate and length are consistent
+    const IAnimationDataModel* SrcModel = InputAnimation->GetDataModel();
+    const FFrameRate SrcFrameRate = SrcModel->GetFrameRate();
+    Ctrl.SetFrameRate(SrcFrameRate, bTransact);
+    const int32 NumFrames = SrcModel->GetNumberOfFrames();
+    Ctrl.SetNumberOfFrames(NumFrames, bTransact);
+
+    // Determine number of frames and pre-allocate tracks
+    TArray<FRawAnimSequenceTrack> BoneTracks;
+    BoneTracks.SetNumZeroed(NumTargetBones);
+    for (int32 BoneIndex = 0; BoneIndex < NumTargetBones; ++BoneIndex) {
+        BoneTracks[BoneIndex].PosKeys.SetNum(NumFrames);
+        BoneTracks[BoneIndex].RotKeys.SetNum(NumFrames);
+        BoneTracks[BoneIndex].ScaleKeys.SetNum(NumFrames);
+    }
+
+    // Evaluate options to match editor behavior
+    FAnimPoseEvaluationOptions EvalOptions;
+    EvalOptions.OptionalSkeletalMesh = const_cast<USkeletalMesh*>(SourceRig.SkeletalMesh);
+    EvalOptions.bExtractRootMotion = false;
+    EvalOptions.bIncorporateRootMotionIntoPose = true;
+
+    // Reset playback of ops
+    Processor.OnPlaybackReset();
+
+    // Iterate frames and retarget
+    for (int32 FrameIndex = 0; FrameIndex < NumFrames; ++FrameIndex) {
+        // Source pose at this frame
+        FAnimPose SourcePose;
+        UAnimPoseExtensions::GetAnimPoseAtFrame(InputAnimation, FrameIndex, EvalOptions, SourcePose);
+
+        for (int32 SIndex = 0; SIndex < NumSourceBones; ++SIndex) {
+            const FName& BoneName = SourceBoneNames[SIndex];
+            SourceComponentPose[SIndex] = UAnimPoseExtensions::GetBonePose(SourcePose, BoneName, EAnimPoseSpaces::World);
+        }
+        for (FTransform& Xform : SourceComponentPose) {
+            Xform.SetScale3D(FVector::OneVector);
+        }
+
+        const float TimeAtFrame = InputAnimation->GetTimeAtFrame(FrameIndex);
+        float DeltaTime = (FrameIndex > 0) ? TimeAtFrame - InputAnimation->GetTimeAtFrame(FrameIndex - 1) : TimeAtFrame;
+
+        // Settings profile per frame
+        FRetargetProfile SettingsProfile;
+        SettingsProfile.FillProfileWithAssetSettings(IKRetargeter);
+
+        // Allow processor to scale if needed
+        Processor.ScaleSourcePose(SourceComponentPose);
+
+        // Run retargeter (chain retargeting)
+        const TArray<FTransform>& TargetComponentPose = Processor.RunRetargeter(SourceComponentPose, SettingsProfile, DeltaTime);
+
+        // Convert to local
+        TArray<FTransform> TargetLocalPose = TargetComponentPose;
+        TargetRig.UpdateLocalTransformsBelowBone(0, TargetLocalPose, TargetComponentPose);
+
+        // Write keys for each bone
+        for (int32 TBoneIndex = 0; TBoneIndex < NumTargetBones; ++TBoneIndex) {
+            const FTransform& Local = TargetLocalPose[TBoneIndex];
+            FRawAnimSequenceTrack& Track = BoneTracks[TBoneIndex];
+            Track.PosKeys[FrameIndex] = FVector3f(Local.GetLocation());
+            Track.RotKeys[FrameIndex] = FQuat4f(Local.GetRotation().GetNormalized());
+            Track.ScaleKeys[FrameIndex] = FVector3f(Local.GetScale3D());
+        }
+    }
+
+    // Commit tracks: clear existing bone curves first to avoid stale data
+    {
+        TArray<FName> ExistingBoneNames;
+        ExistingBoneNames.Reserve(NumTargetBones);
+        for (int32 TBoneIndex = 0; TBoneIndex < NumTargetBones; ++TBoneIndex) {
+            ExistingBoneNames.Add(TargetBoneNames[TBoneIndex]);
+        }
+        // Remove all then re-add to ensure clean state
+        for (const FName& BoneName : ExistingBoneNames) {
+            Ctrl.RemoveBoneTrack(BoneName, bTransact);
+        }
+        for (int32 TBoneIndex = 0; TBoneIndex < NumTargetBones; ++TBoneIndex) {
+            const FName& BoneName = TargetBoneNames[TBoneIndex];
+            const FRawAnimSequenceTrack& Raw = BoneTracks[TBoneIndex];
+            Ctrl.AddBoneCurve(BoneName, bTransact);
+            Ctrl.SetBoneTrackKeys(BoneName, Raw.PosKeys, Raw.RotKeys, Raw.ScaleKeys, bTransact);
+        }
+    }
+
+    Ctrl.CloseBracket(bTransact);
+
+    // Mark and save if requested
+    TargetSequence->PostEditChange();
+    TargetSequence->MarkPackageDirty();
+
+    if (bPersistAssets) {
+        if (UPackage* Pkg = TargetSequence->GetOutermost()) {
+            FSavePackageArgs SaveArgs;
+            SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+            SaveArgs.SaveFlags = SAVE_None;
+            SaveArgs.Error = GError;
+            FString PackageFilename
+                = FPackageName::LongPackageNameToFilename(Pkg->GetName(), FPackageName::GetAssetPackageExtension());
+            UPackage::SavePackage(Pkg, TargetSequence, *PackageFilename, SaveArgs);
+        }
+    }
+
+    // Always create a transient copy and store in outputAnimation
+    {
+        const FString CopyBaseName = FString::Printf(TEXT("%s_OutputCopy"), *TargetSequence->GetName());
+        const FName CopyName
+            = MakeUniqueObjectName(GetTransientPackage(), UAnimSequence::StaticClass(), FName(*CopyBaseName));
+        UAnimSequence* CopySeq = DuplicateObject<UAnimSequence>(TargetSequence, GetTransientPackage(), CopyName);
+        if (CopySeq) {
+            CopySeq->SetSkeleton(TargetSkeleton->GetSkeleton());
+            CopySeq->SetPreviewMesh(TargetSkeleton);
+            outputAnimation = CopySeq;
+        } else {
+            // Fallback to original if duplication failed
+            outputAnimation = TargetSequence;
+        }
+    }
+
+    UE_LOG(Retargeter, Log, TEXT("retargetWithRTG: Completed retargeting to output sequence %s"), *TargetSequence->GetName());
+#else
+    UE_LOG(Retargeter, Warning, TEXT("retargetWithRTG: Editor-only retargeting is not available in this build"));
 #endif
 }
 
@@ -225,8 +432,9 @@ void FRetargeterModule::ProcessImportedAssets(const TArray<UObject*>& ImportedAs
 void FRetargeterModule::RetargetAPair(const FString& InputFbx, const FString& TargetFbx, const FString& OutputPath)
 {
     loadFBX(InputFbx, TargetFbx);
-	createIkRig();
-	createRTG();
+    createIkRig();
+    createRTG();
+	retargetWithRTG();
 }
 
 void FRetargeterModule::loadFBX(const FString& InputFbx, const FString& TargetFbx)
@@ -368,7 +576,8 @@ void FRetargeterModule::createRTG()
         RetargetAsset = Cast<UIKRetargeter>(NewAsset);
     } else {
         // Create transient retargeter
-        FName AssetFName = MakeUniqueObjectName(GetTransientPackage(), UIKRetargeter::StaticClass(), FName(*UniqueAssetName));
+        FName AssetFName
+            = MakeUniqueObjectName(GetTransientPackage(), UIKRetargeter::StaticClass(), FName(*UniqueAssetName));
         RetargetAsset = NewObject<UIKRetargeter>(GetTransientPackage(), AssetFName, RF_Public | RF_Standalone);
     }
 
@@ -376,7 +585,7 @@ void FRetargeterModule::createRTG()
         UE_LOG(Retargeter, Error, TEXT("Failed to create UIKRetargeter asset"));
         return;
     }
-	IKRetargeter = RetargetAsset;
+    IKRetargeter = RetargetAsset;
 
     // Use controller to assign IKRigs and setup default ops
     const UIKRetargeterController* Controller = UIKRetargeterController::GetController(RetargetAsset);
@@ -388,6 +597,14 @@ void FRetargeterModule::createRTG()
     Controller->SetIKRig(ERetargetSourceOrTarget::Source, InputIKRig);
     Controller->SetIKRig(ERetargetSourceOrTarget::Target, TargetIKRig);
     Controller->AddDefaultOps();
+
+    // Disable ops not desired: Run IK Rig and Retarget IK Goals
+    if (FIKRetargetRunIKRigOp* RunIKOp = RetargetAsset->GetFirstRetargetOpOfType<FIKRetargetRunIKRigOp>()) {
+        RunIKOp->SetEnabled(false);
+    }
+    if (FIKRetargetIKChainsOp* IKGoalsOp = RetargetAsset->GetFirstRetargetOpOfType<FIKRetargetIKChainsOp>()) {
+        IKGoalsOp->SetEnabled(false);
+    }
 
     // Set preview meshes via controller if available
     if (InputSkeleton) {
@@ -403,7 +620,8 @@ void FRetargeterModule::createRTG()
     if (bPersistAssets) {
         // Save the package explicitly similar to createIkRig
         FString LongPackageName = UniquePackageName / UniqueAssetName;
-        FString PackageFileName = FPackageName::LongPackageNameToFilename(LongPackageName, FPackageName::GetAssetPackageExtension());
+        FString PackageFileName
+            = FPackageName::LongPackageNameToFilename(LongPackageName, FPackageName::GetAssetPackageExtension());
 
         UPackage* Package = CreatePackage(*LongPackageName);
         if (Package) {

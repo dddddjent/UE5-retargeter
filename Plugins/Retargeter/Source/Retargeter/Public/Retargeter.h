@@ -54,4 +54,5 @@ private:
     UIKRigDefinition* TargetIKRig = nullptr;
 
     UIKRetargeter* IKRetargeter = nullptr;
+    UAnimSequence* outputAnimation = nullptr;
 };

@@ -36,6 +36,7 @@ public class Retargeter : ModuleRules
 				new string[]
 				{
 					"UnrealEd", "AssetRegistry", "AssetTools",
+					"AnimationBlueprintLibrary",
 					"IKRig", "IKRigEditor", "EditorScriptingUtilities",
 					"ToolMenus", "Slate", "SlateCore"
 				}
