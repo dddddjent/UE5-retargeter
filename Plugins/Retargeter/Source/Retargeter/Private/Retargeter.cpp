@@ -330,10 +330,6 @@ void FRetargeterModule::PluginButtonClicked()
 
 void FRetargeterModule::ClearAssetsInPath(const FString& Path)
 {
-    if (!bPersistAssets) {
-        UE_LOG(Retargeter, Verbose, TEXT("Skipping clear of %s (in-memory mode)"), *Path);
-        return;
-    }
     FAssetRegistryModule& AssetRegistryModule
         = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
     TArray<FAssetData> AssetsToDelete;
@@ -369,11 +365,6 @@ void FRetargeterModule::ClearAssetsInPath(const FString& Path)
 
 void FRetargeterModule::CleanPreviousOutputs()
 {
-    if (!bPersistAssets) {
-        UE_LOG(Retargeter, Verbose, TEXT("CleanPreviousOutputs: skipped (in-memory mode)"));
-        return;
-    }
-
     // Clean previously generated transient/persistent outputs under our temp folder.
     // Keep input/target subfolders intact; only clear assets directly under /Game/Animations/tmp.
     const FString RootOutputPath = TEXT("/Game/Animations/tmp");
