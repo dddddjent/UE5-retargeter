@@ -37,7 +37,6 @@
 #include "HAL/FileManager.h"
 #include "IKRig/Public/Rig/IKRigDefinition.h"
 #include "IKRigEditor/Public/RetargetEditor/IKRetargeterController.h"
-#include "IKRigEditor/Public/RigEditor/IKRigAutoCharacterizer.h"
 #include "IKRigEditor/Public/RigEditor/IKRigAutoFBIK.h"
 #include "IKRigEditor/Public/RigEditor/IKRigController.h"
 #include "RetargetEditor/IKRetargetBatchOperation.h"
@@ -201,8 +200,16 @@ void FRetargeterModule::RetargetWithRTG()
             SourceComponentPose[SIndex]
                 = UAnimPoseExtensions::GetBonePose(SourcePose, BoneName, EAnimPoseSpaces::World);
         }
-        for (FTransform& Xform : SourceComponentPose) {
-            Xform.SetScale3D(FVector::OneVector);
+        // Headless-safe uniform scale: apply translation scale and reset scale to identity
+        if (!FMath::IsNearlyEqual(UniformScale, 1.0f)) {
+            for (FTransform& Xform : SourceComponentPose) {
+                Xform.SetLocation(Xform.GetLocation() * UniformScale);
+                Xform.SetScale3D(FVector::OneVector);
+            }
+        } else {
+            for (FTransform& Xform : SourceComponentPose) {
+                Xform.SetScale3D(FVector::OneVector);
+            }
         }
 
         const float TimeAtFrame = InputAnimation->GetTimeAtFrame(FrameIndex);
@@ -227,7 +234,11 @@ void FRetargeterModule::RetargetWithRTG()
         for (int32 TBoneIndex = 0; TBoneIndex < NumTargetBones; ++TBoneIndex) {
             const FTransform& Local = TargetLocalPose[TBoneIndex];
             FRawAnimSequenceTrack& Track = BoneTracks[TBoneIndex];
-            Track.PosKeys[FrameIndex] = FVector3f(Local.GetLocation());
+            FVector3f Pos = FVector3f(Local.GetLocation());
+            if (!FMath::IsNearlyEqual(UniformScale, 1.0f)) {
+                Pos *= static_cast<float>(UniformScale);
+            }
+            Track.PosKeys[FrameIndex] = Pos;
             Track.RotKeys[FrameIndex] = FQuat4f(Local.GetRotation().GetNormalized());
             Track.ScaleKeys[FrameIndex] = FVector3f(Local.GetScale3D());
         }
@@ -504,6 +515,11 @@ void FRetargeterModule::RetargetAPair(const FString& InputFbx, const FString& Ta
     // Delete any previous retargeted outputs first to avoid dangling references
     // to assets from a prior target skeleton when switching FBX files.
     CleanPreviousOutputs();
+
+    // Apply default uniform scale in commandlet mode (headless-safe), matches 0.01 import offset
+    if (IsRunningCommandlet()) {
+        UniformScale = 0.01f;
+    }
 
     LoadFBX(InputFbx, TargetFbx);
     CreateIkRig();

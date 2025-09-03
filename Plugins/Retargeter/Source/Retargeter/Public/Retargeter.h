@@ -27,6 +27,9 @@ public:
     bool GetPersistAssets() const;
 
     void RetargetAPair(const FString& InputFbx, const FString& TargetFbx, const FString& OutputPath);
+    
+    // Optional: configure a uniform scale applied to bone translations during processing (headless-safe)
+    void SetUniformScale(float InScale) { UniformScale = InScale; }
 
 private:
     void RegisterMenus();
@@ -65,4 +68,7 @@ private:
 
     UIKRetargeter* IKRetargeter = nullptr;
     UAnimSequence* outputAnimation = nullptr;
+
+    // Applied to bone translation values when generating poses (commandlet-safe alternative to FBX ImportUniformScale)
+    float UniformScale = 1.0f;
 };
