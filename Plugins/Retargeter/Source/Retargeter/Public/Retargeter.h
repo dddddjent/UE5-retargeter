@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "Containers/Map.h"
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
 #include "Retargeter/IKRetargeter.h"
@@ -37,6 +38,12 @@ private:
     void ProcessImportedAssets(const TArray<UObject*>& ImportedAssets, bool bIsInput);
     void LoadFBX(const FString& InputFbx, const FString& TargetFbx);
 
+    // This requires the input skeleton:
+    // - Has very standard names (no prefix/suffix)
+    // - added names have "_added" 
+    // - added are at the parent positions (hips -> spine_added_0 -> spine)
+    // - Spine2 and Hips must exist
+    TMap<FName, TPair<FName, FName>> GenerateRetargetChains(USkeletalMesh* Mesh);
     void CreateIkRig();
 
     void CreateRTG();

@@ -1,6 +1,10 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Retargeter.h"
+#include "Containers/Array.h"
+#include "Containers/Map.h"
+#include "Misc/CoreMiscDefines.h"
+#include "ReferenceSkeleton.h"
 // Editor-only includes
 #if WITH_EDITOR
 #include "Framework/MultiBox/MultiBoxBuilder.h"
@@ -27,6 +31,10 @@
 // IKRig editor/public headers
 #include "AnimPose.h"
 #include "AnimationBlueprintLibrary.h"
+#include "AssetExportTask.h"
+#include "Exporters/AnimSequenceExporterFBX.h"
+#include "Exporters/FbxExportOption.h"
+#include "HAL/FileManager.h"
 #include "IKRig/Public/Rig/IKRigDefinition.h"
 #include "IKRigEditor/Public/RetargetEditor/IKRetargeterController.h"
 #include "IKRigEditor/Public/RigEditor/IKRigAutoCharacterizer.h"
@@ -36,13 +44,9 @@
 #include "RetargetEditor/IKRetargetFactory.h"
 #include "Retargeter/IKRetargetProcessor.h"
 #include "Retargeter/IKRetargeter.h"
-#include "Retargeter/RetargetOps/RunIKRigOp.h"
 #include "Retargeter/RetargetOps/IKChainsOp.h"
+#include "Retargeter/RetargetOps/RunIKRigOp.h"
 #include "UObject/SavePackage.h"
-#include "Exporters/AnimSequenceExporterFBX.h"
-#include "AssetExportTask.h"
-#include "Exporters/FbxExportOption.h"
-#include "HAL/FileManager.h"
 #endif
 
 #define LOCTEXT_NAMESPACE "FRetargeterModule"
@@ -125,8 +129,10 @@ void FRetargeterModule::RetargetWithRTG()
             // Duplicate into /Game/Animations/tmp
             const FString DesiredPath = TEXT("/Game/Animations/tmp");
             FString UniquePkgName, UniqueAssetName;
-            const FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
-            AssetToolsModule.Get().CreateUniqueAssetName(DesiredPath / OutName, TEXT(""), UniquePkgName, UniqueAssetName);
+            const FAssetToolsModule& AssetToolsModule
+                = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+            AssetToolsModule.Get().CreateUniqueAssetName(
+                DesiredPath / OutName, TEXT(""), UniquePkgName, UniqueAssetName);
 
             UPackage* Package = CreatePackage(*UniquePkgName);
             TargetSequence = DuplicateObject<UAnimSequence>(InputAnimation, Package, *UniqueAssetName);
@@ -192,7 +198,8 @@ void FRetargeterModule::RetargetWithRTG()
 
         for (int32 SIndex = 0; SIndex < NumSourceBones; ++SIndex) {
             const FName& BoneName = SourceBoneNames[SIndex];
-            SourceComponentPose[SIndex] = UAnimPoseExtensions::GetBonePose(SourcePose, BoneName, EAnimPoseSpaces::World);
+            SourceComponentPose[SIndex]
+                = UAnimPoseExtensions::GetBonePose(SourcePose, BoneName, EAnimPoseSpaces::World);
         }
         for (FTransform& Xform : SourceComponentPose) {
             Xform.SetScale3D(FVector::OneVector);
@@ -209,7 +216,8 @@ void FRetargeterModule::RetargetWithRTG()
         Processor.ScaleSourcePose(SourceComponentPose);
 
         // Run retargeter (chain retargeting)
-        const TArray<FTransform>& TargetComponentPose = Processor.RunRetargeter(SourceComponentPose, SettingsProfile, DeltaTime);
+        const TArray<FTransform>& TargetComponentPose
+            = Processor.RunRetargeter(SourceComponentPose, SettingsProfile, DeltaTime);
 
         // Convert to local
         TArray<FTransform> TargetLocalPose = TargetComponentPose;
@@ -277,7 +285,8 @@ void FRetargeterModule::RetargetWithRTG()
         }
     }
 
-    UE_LOG(Retargeter, Log, TEXT("retargetWithRTG: Completed retargeting to output sequence %s"), *TargetSequence->GetName());
+    UE_LOG(Retargeter, Log, TEXT("retargetWithRTG: Completed retargeting to output sequence %s"),
+        *TargetSequence->GetName());
 #else
     UE_LOG(Retargeter, Warning, TEXT("retargetWithRTG: Editor-only retargeting is not available in this build"));
 #endif
@@ -353,8 +362,8 @@ void FRetargeterModule::ClearAssetsInPath(const FString& Path)
                 }
             }
             if (ObjectsToForceDelete.Num() > 0) {
-                UE_LOG(Retargeter, Log, TEXT("Force deleting %d remaining assets under %s"),
-                    ObjectsToForceDelete.Num(), *Path);
+                UE_LOG(Retargeter, Log, TEXT("Force deleting %d remaining assets under %s"), ObjectsToForceDelete.Num(),
+                    *Path);
                 const int32 NumForceDeleted
                     = ObjectTools::ForceDeleteObjects(ObjectsToForceDelete, /*ShowConfirmation=*/false);
                 UE_LOG(Retargeter, Log, TEXT("ForceDeleteObjects removed %d assets from %s"), NumForceDeleted, *Path);
@@ -399,7 +408,8 @@ void FRetargeterModule::CleanPreviousOutputs()
         return;
     }
 
-    UE_LOG(Retargeter, Log, TEXT("CleanPreviousOutputs: deleting %d assets under %s"), AssetsToDelete.Num(), *RootOutputPath);
+    UE_LOG(Retargeter, Log, TEXT("CleanPreviousOutputs: deleting %d assets under %s"), AssetsToDelete.Num(),
+        *RootOutputPath);
     const int32 NumDeleted = ObjectTools::DeleteAssets(AssetsToDelete, /*bShowConfirmation=*/false);
     UE_LOG(Retargeter, Log, TEXT("CleanPreviousOutputs: DeleteAssets removed %d assets"), NumDeleted);
 
@@ -418,7 +428,8 @@ void FRetargeterModule::CleanPreviousOutputs()
             if (ObjectsToForceDelete.Num() > 0) {
                 const int32 NumForceDeleted
                     = ObjectTools::ForceDeleteObjects(ObjectsToForceDelete, /*ShowConfirmation=*/false);
-                UE_LOG(Retargeter, Log, TEXT("CleanPreviousOutputs: ForceDeleteObjects removed %d assets"), NumForceDeleted);
+                UE_LOG(Retargeter, Log, TEXT("CleanPreviousOutputs: ForceDeleteObjects removed %d assets"),
+                    NumForceDeleted);
             }
         }
     }
@@ -497,8 +508,8 @@ void FRetargeterModule::RetargetAPair(const FString& InputFbx, const FString& Ta
     LoadFBX(InputFbx, TargetFbx);
     CreateIkRig();
     CreateRTG();
-	RetargetWithRTG();
-	ExportOutputAnimationFBX(OutputPath);
+    RetargetWithRTG();
+    ExportOutputAnimationFBX(OutputPath);
 
     // Release references to created/imported assets so they can be garbage collected
     // Clearing member pointers avoids holding onto transient or editor-only assets
@@ -536,6 +547,84 @@ void FRetargeterModule::LoadFBX(const FString& InputFbx, const FString& TargetFb
     ProcessImportedAssets(TargetAssets, false);
 }
 
+TMap<FName, TPair<FName, FName>> FRetargeterModule::GenerateRetargetChains(USkeletalMesh* Mesh)
+{
+    // Chain name, start bone, end bone
+    TMap<FName, TPair<FName, FName>> Chains;
+    const FReferenceSkeleton& RefSkeleton = Mesh->GetRefSkeleton();
+    const int32 NumBones = RefSkeleton.GetNum();
+
+    TMap<FString, int32> BoneNameIndexMap;
+    TMap<int32, FString> IndexChainNameMap;
+    for (int32 i = 0; i < NumBones; ++i) {
+        const FName BoneFName = RefSkeleton.GetBoneName(i);
+        FString BoneLower = BoneFName.ToString().ToLower();
+        if (BoneLower.Contains(TEXT("_added")))
+            continue;
+
+        BoneNameIndexMap.Add(BoneLower, i);
+    }
+
+    // For those that are not in the map, add them with INDEX_NONE
+    auto FindOrAddBoneIdx = [&BoneNameIndexMap, &IndexChainNameMap](const TCHAR* InName) -> int32 {
+        const FString Key = FString(InName).ToLower();
+        if (int32* Ptr = BoneNameIndexMap.Find(Key)) {
+            IndexChainNameMap.Add(*Ptr, Key);
+            return *Ptr;
+        }
+        BoneNameIndexMap.Add(Key, INDEX_NONE);
+        return INDEX_NONE;
+    };
+
+    int32 HipsIdx = BoneNameIndexMap.FindRef(TEXT("hips"));
+    int32 Spine2Idx = BoneNameIndexMap.FindRef(TEXT("spine2"));
+
+    int32 SpineIdx = FindOrAddBoneIdx(TEXT("spine"));
+    int32 NeckIdx = FindOrAddBoneIdx(TEXT("neck"));
+    int32 HeadIdx = FindOrAddBoneIdx(TEXT("head"));
+    int32 LeftShoulderIdx = FindOrAddBoneIdx(TEXT("leftshoulder"));
+    int32 RightShoulderIdx = FindOrAddBoneIdx(TEXT("rightshoulder"));
+    int32 LeftArmIdx = FindOrAddBoneIdx(TEXT("leftarm"));
+    int32 LeftForeArmIdx = FindOrAddBoneIdx(TEXT("leftforearm"));
+    int32 RightArmIdx = FindOrAddBoneIdx(TEXT("rightarm"));
+    int32 RightForeArmIdx = FindOrAddBoneIdx(TEXT("rightforearm"));
+    int32 LeftUpLegIdx = FindOrAddBoneIdx(TEXT("leftupleg"));
+    int32 LeftLegIdx = FindOrAddBoneIdx(TEXT("leftleg"));
+    int32 RightUpLegIdx = FindOrAddBoneIdx(TEXT("rightupleg"));
+    int32 RightLegIdx = FindOrAddBoneIdx(TEXT("rightleg"));
+
+    TArray<int32> Ends, Tmp;
+    Ends.Reset(6);
+    Ends.Add(Spine2Idx);
+    for (int32 i = 0; i < NumBones; ++i) {
+        RefSkeleton.GetDirectChildBones(i, Tmp);
+        if (Tmp.Num() == 0)
+            Ends.Add(i);
+    }
+    check(Ends.Num() == 6);
+
+    for (int32 i = 0; i < Ends.Num(); ++i) {
+        int32 CurrIdx = Ends[i];
+        int32 ChainStartIdx = Ends[i];
+        while (CurrIdx != INDEX_NONE && CurrIdx != HipsIdx) {
+            if (IndexChainNameMap.Contains(CurrIdx)) {
+                UE_LOG(Retargeter, Log, TEXT("CurrIdx: %d, ChainStartIdx: %d"), CurrIdx, ChainStartIdx);
+                UE_LOG(Retargeter, Log, TEXT("CurrName: %s, ChainStartName: %s"),
+                    *RefSkeleton.GetBoneName(CurrIdx).ToString(), *RefSkeleton.GetBoneName(ChainStartIdx).ToString());
+                Chains.Add(FName(*IndexChainNameMap[CurrIdx]),
+                    TPair<FName, FName>(*RefSkeleton.GetBoneName(CurrIdx).ToString(),
+                        *RefSkeleton.GetBoneName(ChainStartIdx).ToString()));
+                ChainStartIdx = RefSkeleton.GetParentIndex(CurrIdx);
+            }
+            CurrIdx = RefSkeleton.GetParentIndex(CurrIdx);
+            if (CurrIdx == Spine2Idx)
+                break;
+        }
+    }
+
+    return Chains;
+}
+
 void FRetargeterModule::CreateIkRig()
 {
     UE_LOG(Retargeter, Log, TEXT("createIkRig called"));
@@ -570,9 +659,18 @@ void FRetargeterModule::CreateIkRig()
         Controller->SetSkeletalMesh(Mesh);
 
         // Auto-generate retarget chains and FBIK
-        FAutoCharacterizeResults CharacterizationResults;
-        Controller->AutoGenerateRetargetDefinition(CharacterizationResults);
-        Controller->SetRetargetDefinition(CharacterizationResults.AutoRetargetDefinition.RetargetDefinition);
+        // FAutoCharacterizeResults CharacterizationResults;
+        // Controller->AutoGenerateRetargetDefinition(CharacterizationResults);
+        // Controller->SetRetargetDefinition(CharacterizationResults.AutoRetargetDefinition.RetargetDefinition);
+
+        FRetargetDefinition RetargetDef;
+        const auto Chains = GenerateRetargetChains(Mesh);
+        for (auto& Pair : Chains) {
+            RetargetDef.AddBoneChain(Pair.Key, Pair.Value.Key, Pair.Value.Value);
+        }
+        RetargetDef.RootBone = FName("Hips");
+        Controller->SetRetargetDefinition(RetargetDef);
+        Controller->SetRetargetRoot(FName("Hips"));
 
         // Set preview mesh on the asset so editor shows it
         OutIKRig->SetPreviewMesh(Mesh);
@@ -749,7 +847,7 @@ void FRetargeterModule::ExportOutputAnimationFBX(const FString& OutputPath)
     Exporter->SetShowExportOption(false);
 
     FString CleanOutputPath = OutputPath;
-    IFileManager::Get().MakeDirectory(*FPaths::GetPath(CleanOutputPath), /*Tree*/true);
+    IFileManager::Get().MakeDirectory(*FPaths::GetPath(CleanOutputPath), /*Tree*/ true);
 
     UFbxExportOption* ExportOptions = NewObject<UFbxExportOption>();
     ExportOptions->bASCII = false;
