@@ -37,7 +37,7 @@
 #include "HAL/FileManager.h"
 #include "IKRig/Public/Rig/IKRigDefinition.h"
 #include "IKRigEditor/Public/RetargetEditor/IKRetargeterController.h"
-#include "IKRigEditor/Public/RigEditor/IKRigAutoCharacterizer.h"
+
 #include "IKRigEditor/Public/RigEditor/IKRigAutoFBIK.h"
 #include "IKRigEditor/Public/RigEditor/IKRigController.h"
 #include "RetargetEditor/IKRetargetBatchOperation.h"
@@ -241,13 +241,43 @@ void FRetargeterModule::RetargetWithRTG()
         }
         TSet<FName> ExistingTrackSet(ExistingTrackNames);
 
+        // Find the Hips bone index and collect its ancestors to skip
+        //! Sometimes the ancestors can't be added to the bone track?
+        int32 HipsBoneIndex = INDEX_NONE;
+        const FReferenceSkeleton& RefSkeleton = TargetSkeleton->GetRefSkeleton();
+        for (int32 BoneIndex = 0; BoneIndex < NumTargetBones; ++BoneIndex) {
+            if (TargetBoneNames[BoneIndex] == FName("Hips")) {
+                HipsBoneIndex = BoneIndex;
+                break;
+            }
+        }
+
+        // Collect all ancestors of Hips (bones above Hips in hierarchy)
+        TSet<int32> AncestorIndices;
+        if (HipsBoneIndex != INDEX_NONE) {
+            int32 CurrentIndex = RefSkeleton.GetParentIndex(HipsBoneIndex);
+            while (CurrentIndex != INDEX_NONE) {
+                AncestorIndices.Add(CurrentIndex);
+                CurrentIndex = RefSkeleton.GetParentIndex(CurrentIndex);
+            }
+        }
+
         for (int32 TBoneIndex = 0; TBoneIndex < NumTargetBones; ++TBoneIndex) {
             const FName& BoneName = TargetBoneNames[TBoneIndex];
+
+            // Skip bones that are ancestors of Hips (above Hips in hierarchy)
+            if (AncestorIndices.Contains(TBoneIndex)) {
+                UE_LOG(Retargeter, Log, TEXT("Skipping ancestor of Hips: %s"), *BoneName.ToString());
+                continue;
+            }
+
             const FRawAnimSequenceTrack& Raw = BoneTracks[TBoneIndex];
             if (!ExistingTrackSet.Contains(BoneName)) {
                 Ctrl.AddBoneCurve(BoneName, bTransact);
             }
-            Ctrl.SetBoneTrackKeys(BoneName, Raw.PosKeys, Raw.RotKeys, Raw.ScaleKeys, bTransact);
+            if (ExistingTrackSet.Contains(BoneName)) {
+                Ctrl.SetBoneTrackKeys(BoneName, Raw.PosKeys, Raw.RotKeys, Raw.ScaleKeys, bTransact);
+            }
         }
     }
 
