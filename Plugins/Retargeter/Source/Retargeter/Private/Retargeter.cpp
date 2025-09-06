@@ -50,9 +50,12 @@
 #include "UObject/SavePackage.h"
 #endif
 
+#include "RetargeterLog.h"
+
 #define LOCTEXT_NAMESPACE "FRetargeterModule"
 
-DEFINE_LOG_CATEGORY_STATIC(Retargeter, Log, All);
+// Define a global log category so other translation units can change verbosity.
+DEFINE_LOG_CATEGORY(Retargeter);
 
 // Static singleton instance
 FRetargeterModule* FRetargeterModule::SingletonInstance = nullptr;
