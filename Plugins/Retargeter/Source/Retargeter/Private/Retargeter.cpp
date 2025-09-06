@@ -652,9 +652,9 @@ TMap<FName, TPair<FName, FName>> FRetargeterModule::GenerateRetargetChains(USkel
         int32 ChainStartIdx = Ends[i];
         while (CurrIdx != INDEX_NONE && CurrIdx != HipsIdx) {
             if (IndexChainNameMap.Contains(CurrIdx)) {
-                UE_LOG(Retargeter, Log, TEXT("CurrIdx: %d, ChainStartIdx: %d"), CurrIdx, ChainStartIdx);
-                UE_LOG(Retargeter, Log, TEXT("CurrName: %s, ChainStartName: %s"),
-                    *RefSkeleton.GetBoneName(CurrIdx).ToString(), *RefSkeleton.GetBoneName(ChainStartIdx).ToString());
+                // UE_LOG(Retargeter, Log, TEXT("CurrIdx: %d, ChainStartIdx: %d"), CurrIdx, ChainStartIdx);
+                // UE_LOG(Retargeter, Log, TEXT("CurrName: %s, ChainStartName: %s"),
+                //     *RefSkeleton.GetBoneName(CurrIdx).ToString(), *RefSkeleton.GetBoneName(ChainStartIdx).ToString());
                 Chains.Add(FName(*IndexChainNameMap[CurrIdx]),
                     TPair<FName, FName>(*RefSkeleton.GetBoneName(CurrIdx).ToString(),
                         *RefSkeleton.GetBoneName(ChainStartIdx).ToString()));
