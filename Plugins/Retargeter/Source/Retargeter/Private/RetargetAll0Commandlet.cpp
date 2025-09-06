@@ -32,6 +32,11 @@ int32 URetargetAll0Commandlet::Main(const FString& Params)
         return 1;
     }
 
+    // Parse optional seed parameter (default to 0)
+    int32 MainSeed = 0;
+    FParse::Value(*Params, TEXT("seed="), MainSeed);
+    UE_LOG(RetargetAllCommandlet, Log, TEXT("Using main seed: %d"), MainSeed);
+
     const FString HomeDir = FPlatformMisc::GetEnvironmentVariable(TEXT("HOME"));
     auto ExpandTilde = [&](FString& InOutPath) {
         if (HomeDir.IsEmpty()) {
@@ -60,12 +65,12 @@ int32 URetargetAll0Commandlet::Main(const FString& Params)
 
     UE_LOG(RetargetAllCommandlet, Log, TEXT("Arguments validated. Proceeding with batch retargeting..."));
 
-    RetargetAllInDataset(BasePath);
+    RetargetAllInDataset(BasePath, MainSeed);
 
     return 0;
 }
 
-void URetargetAll0Commandlet::RetargetAllInDataset(const FString& BasePath)
+void URetargetAll0Commandlet::RetargetAllInDataset(const FString& BasePath, int32 MainSeed)
 {
     const int32 NumWorkers = 2;
     TArray<FString> SubDirs = { TEXT("train"), TEXT("val"), TEXT("test") };
@@ -95,13 +100,17 @@ void URetargetAll0Commandlet::RetargetAllInDataset(const FString& BasePath)
             FString EditorExe = FPlatformProcess::GetApplicationName(FPlatformProcess::GetCurrentProcessId());
             FString ProjectPath = FPaths::GetProjectFilePath();
             FString LogFile = FString::Printf(TEXT("\"%sSaved/Logs/worker_%s_%d.log\""), *FPaths::ProjectDir(), *SubDir, i);
+            
+            // Generate unique seed for this worker using main seed and worker index
+            int32 WorkerSeed = MainSeed + (i * 1000) + GetTypeHash(SubDir) % 1000;
+            
             FString Args = FString::Printf(TEXT("\"%s\" -run=RetargetWorker -input=\"%s\" -subdir=%s -workerindex=%d "
-                                                "-numworkers=%d -LogCmds=\"global off, log RetargetAllCommandlet "
+                                                "-numworkers=%d -seed=%d -LogCmds=\"global off, log RetargetAllCommandlet "
                                                 "verbose\" -NoStdOut --stdout -NOCONSOLE -unattended"),
             // FString Args = FString::Printf(TEXT("\"%s\" -run=RetargetWorker -input=\"%s\" -subdir=%s -workerindex=%d "
             //                                     "-numworkers=%d "
             //                                     " -NoStdOut --stdout -NOCONSOLE -unattended"),
-                *ProjectPath, *BasePath, *SubDir, i, NumWorkers);
+                *ProjectPath, *BasePath, *SubDir, i, NumWorkers, WorkerSeed);
 
             UE_LOG(RetargetAllCommandlet, Log, TEXT("Launching worker %d for %s with args: %s"), i, *SubDir, *Args);
 

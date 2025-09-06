@@ -19,9 +19,9 @@ public:
 	virtual int32 Main(const FString& Params) override;
 
 private:
-    void ProcessDirectory(const FString& BasePath, const FString& SubDir, int32 WorkerIndex, int32 NumWorkers);
-    void ProcessTrainDirectory(const FString& TrainPath, int32 WorkerIndex, int32 NumWorkers);
-    void ProcessTestValDirectory(const FString& DirPath, const FString& DirName, int32 WorkerIndex, int32 NumWorkers);
+    void ProcessDirectory(const FString& BasePath, const FString& SubDir, int32 WorkerIndex, int32 NumWorkers, int32 Seed);
+    void ProcessTrainDirectory(const FString& TrainPath, int32 WorkerIndex, int32 NumWorkers, int32 Seed);
+    void ProcessTestValDirectory(const FString& DirPath, const FString& DirName, int32 WorkerIndex, int32 NumWorkers, int32 Seed);
     TArray<FString> GetFBXFiles(const FString& DirectoryPath);
-    TArray<FString> GetRandomSubset(const TArray<FString>& InputArray, int32 Count);
+    TArray<FString> GetRandomSubset(const TArray<FString>& InputArray, int32 Count, int32 Seed);
 };
