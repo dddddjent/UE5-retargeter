@@ -3,6 +3,7 @@
 #include "Retargeter.h"
 #include "Containers/Array.h"
 #include "Containers/Map.h"
+#include "Math/MathFwd.h"
 #include "Misc/CoreMiscDefines.h"
 #include "ReferenceSkeleton.h"
 // Editor-only includes
@@ -146,8 +147,8 @@ void FRetargeterModule::RetargetWithRTG()
     EvalOptions.bIncorporateRootMotionIntoPose = true;
 
     // Process frame retargeting
-    ProcessFrameRetargeting(Processor, SourceRig, TargetRig, SourceBoneNames, TargetBoneNames, 
-        SourceComponentPose, BoneTracks, EvalOptions, NumFrames, NumTargetBones);
+    ProcessFrameRetargeting(Processor, SourceRig, TargetRig, SourceBoneNames, TargetBoneNames, SourceComponentPose,
+        BoneTracks, EvalOptions, NumFrames, NumTargetBones);
 
     // Commit bone tracks to animation
     CommitBoneTracks(Ctrl, BoneTracks, TargetBoneNames, NumTargetBones);
@@ -182,13 +183,12 @@ bool FRetargeterModule::InitializeRetargetProcessor(FIKRetargetProcessor& Proces
 UAnimSequence* FRetargeterModule::CreateTargetSequence(const FString& OutputName)
 {
     UAnimSequence* TargetSequence = nullptr;
-    
+
     if (bPersistAssets && InputAnimation->GetOutermost()) {
         // Duplicate into /Game/Animations/tmp
         const FString DesiredPath = TEXT("/Game/Animations/tmp");
         FString UniquePkgName, UniqueAssetName;
-        const FAssetToolsModule& AssetToolsModule
-            = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+        const FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
         AssetToolsModule.Get().CreateUniqueAssetName(
             DesiredPath / OutputName, TEXT(""), UniquePkgName, UniqueAssetName);
 
@@ -209,17 +209,18 @@ UAnimSequence* FRetargeterModule::CreateTargetSequence(const FString& OutputName
             TargetSequence->SetPreviewMesh(TargetSkeleton);
         }
     }
-    
+
     return TargetSequence;
 }
 
-void FRetargeterModule::SetupAnimationController(UAnimSequence* TargetSequence, IAnimationDataController& Ctrl, int32& NumFrames)
+void FRetargeterModule::SetupAnimationController(
+    UAnimSequence* TargetSequence, IAnimationDataController& Ctrl, int32& NumFrames)
 {
     constexpr bool bTransact = false;
     Ctrl.OpenBracket(FText::FromString("Generating Retargeted Animation Data"), bTransact);
     Ctrl.NotifyPopulated();
     Ctrl.UpdateWithSkeleton(TargetSkeleton->GetSkeleton(), bTransact);
-    
+
     // For duplicated sequences, the model is already initialized; still ensure frame rate and length are consistent
     const IAnimationDataModel* SrcModel = InputAnimation->GetDataModel();
     const FFrameRate SrcFrameRate = SrcModel->GetFrameRate();
@@ -228,11 +229,10 @@ void FRetargeterModule::SetupAnimationController(UAnimSequence* TargetSequence, 
     Ctrl.SetNumberOfFrames(NumFrames, bTransact);
 }
 
-void FRetargeterModule::ProcessFrameRetargeting(FIKRetargetProcessor& Processor, const FRetargetSkeleton& SourceRig, 
-    const FRetargetSkeleton& TargetRig, const TArray<FName>& SourceBoneNames, 
-    const TArray<FName>& TargetBoneNames, TArray<FTransform>& SourceComponentPose, 
-    TArray<FRawAnimSequenceTrack>& BoneTracks, const FAnimPoseEvaluationOptions& EvalOptions, 
-    int32 NumFrames, int32 NumTargetBones)
+void FRetargeterModule::ProcessFrameRetargeting(FIKRetargetProcessor& Processor, const FRetargetSkeleton& SourceRig,
+    const FRetargetSkeleton& TargetRig, const TArray<FName>& SourceBoneNames, const TArray<FName>& TargetBoneNames,
+    TArray<FTransform>& SourceComponentPose, TArray<FRawAnimSequenceTrack>& BoneTracks,
+    const FAnimPoseEvaluationOptions& EvalOptions, int32 NumFrames, int32 NumTargetBones)
 {
     const int32 NumSourceBones = SourceBoneNames.Num();
 
@@ -283,55 +283,20 @@ void FRetargeterModule::ProcessFrameRetargeting(FIKRetargetProcessor& Processor,
     }
 }
 
-void FRetargeterModule::CommitBoneTracks(IAnimationDataController& Ctrl, const TArray<FRawAnimSequenceTrack>& BoneTracks, 
-    const TArray<FName>& TargetBoneNames, int32 NumTargetBones)
+void FRetargeterModule::CommitBoneTracks(IAnimationDataController& Ctrl,
+    const TArray<FRawAnimSequenceTrack>& BoneTracks, const TArray<FName>& TargetBoneNames, int32 NumTargetBones)
 {
     constexpr bool bTransact = false;
-    
-    // Get existing track names to avoid duplicates
-    TArray<FName> ExistingTrackNames;
-    if (const IAnimationDataModel* Model = Ctrl.GetModel()) {
-        Model->GetBoneTrackNames(ExistingTrackNames);
-    }
-    TSet<FName> ExistingTrackSet(ExistingTrackNames);
-
-    // Find the Hips bone index and collect its ancestors to skip
-    //! Sometimes the ancestors can't be added to the bone track?
-    int32 HipsBoneIndex = INDEX_NONE;
-    const FReferenceSkeleton& RefSkeleton = TargetSkeleton->GetRefSkeleton();
-    for (int32 BoneIndex = 0; BoneIndex < NumTargetBones; ++BoneIndex) {
-        if (TargetBoneNames[BoneIndex] == FName("Hips")) {
-            HipsBoneIndex = BoneIndex;
-            break;
-        }
-    }
-
-    // Collect all ancestors of Hips (bones above Hips in hierarchy)
-    TSet<int32> AncestorIndices;
-    if (HipsBoneIndex != INDEX_NONE) {
-        int32 CurrentIndex = RefSkeleton.GetParentIndex(HipsBoneIndex);
-        while (CurrentIndex != INDEX_NONE) {
-            AncestorIndices.Add(CurrentIndex);
-            CurrentIndex = RefSkeleton.GetParentIndex(CurrentIndex);
-        }
-    }
-
+    TArray<FName> TrackNames;
+    Ctrl.GetModel()->GetBoneTrackNames(TrackNames);
+    TSet<FName> TrackSet(TrackNames);
     for (int32 TBoneIndex = 0; TBoneIndex < NumTargetBones; ++TBoneIndex) {
         const FName& BoneName = TargetBoneNames[TBoneIndex];
-
-        // Skip bones that are ancestors of Hips (above Hips in hierarchy)
-        if (AncestorIndices.Contains(TBoneIndex)) {
-            UE_LOG(Retargeter, Log, TEXT("Skipping ancestor of Hips: %s"), *BoneName.ToString());
-            continue;
-        }
-
         const FRawAnimSequenceTrack& Raw = BoneTracks[TBoneIndex];
-        if (!ExistingTrackSet.Contains(BoneName)) {
+        if (!TrackSet.Contains(BoneName)) {
             Ctrl.AddBoneCurve(BoneName, bTransact);
         }
-        if (ExistingTrackSet.Contains(BoneName)) {
-            Ctrl.SetBoneTrackKeys(BoneName, Raw.PosKeys, Raw.RotKeys, Raw.ScaleKeys, bTransact);
-        }
+        Ctrl.SetBoneTrackKeys(BoneName, Raw.PosKeys, Raw.RotKeys, Raw.ScaleKeys, bTransact);
     }
 }
 
