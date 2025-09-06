@@ -336,6 +336,7 @@ void FRetargeterModule::CreateOutputCopy(UAnimSequence* TargetSequence)
         = MakeUniqueObjectName(GetTransientPackage(), UAnimSequence::StaticClass(), FName(*CopyBaseName));
     UAnimSequence* CopySeq = DuplicateObject<UAnimSequence>(TargetSequence, GetTransientPackage(), CopyName);
     if (CopySeq) {
+        CopySeq->WaitOnExistingCompression(true);
         CopySeq->SetSkeleton(TargetSkeleton->GetSkeleton());
         CopySeq->SetPreviewMesh(TargetSkeleton);
         outputAnimation = CopySeq;
