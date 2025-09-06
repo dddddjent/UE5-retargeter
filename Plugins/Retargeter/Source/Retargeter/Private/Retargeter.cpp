@@ -3,6 +3,7 @@
 #include "Retargeter.h"
 #include "Containers/Array.h"
 #include "Containers/Map.h"
+#include "Logging/LogMacros.h"
 #include "Math/MathFwd.h"
 #include "Misc/CoreMiscDefines.h"
 #include "ReferenceSkeleton.h"
@@ -198,6 +199,10 @@ UAnimSequence* FRetargeterModule::CreateTargetSequence(const FString& OutputName
         UPackage* Package = CreatePackage(*UniquePkgName);
         TargetSequence = DuplicateObject<UAnimSequence>(InputAnimation, Package, *UniqueAssetName);
         if (TargetSequence) {
+            //! prevent controller close bracket deadlock
+            // Wait for any existing compression to finish, without acquiring the readlock
+            // So that the controller can acquire the writelock in closebracket
+            TargetSequence->WaitOnExistingCompression(true);
             TargetSequence->SetFlags(RF_Public | RF_Standalone);
             TargetSequence->SetSkeleton(TargetSkeleton->GetSkeleton());
             TargetSequence->SetPreviewMesh(TargetSkeleton);
@@ -208,6 +213,7 @@ UAnimSequence* FRetargeterModule::CreateTargetSequence(const FString& OutputName
         FName UniqueName = MakeUniqueObjectName(GetTransientPackage(), UAnimSequence::StaticClass(), *OutputName);
         TargetSequence = DuplicateObject<UAnimSequence>(InputAnimation, GetTransientPackage(), UniqueName);
         if (TargetSequence) {
+            TargetSequence->WaitOnExistingCompression(true);
             TargetSequence->SetSkeleton(TargetSkeleton->GetSkeleton());
             TargetSequence->SetPreviewMesh(TargetSkeleton);
         }
@@ -220,9 +226,11 @@ void FRetargeterModule::SetupAnimationController(
     UAnimSequence* TargetSequence, IAnimationDataController& Ctrl, int32& NumFrames)
 {
     constexpr bool bTransact = false;
+    Ctrl.UpdateWithSkeleton(TargetSkeleton->GetSkeleton(), bTransact);
+
+    // Start the edit bracket and populate
     Ctrl.OpenBracket(FText::FromString("Generating Retargeted Animation Data"), bTransact);
     Ctrl.NotifyPopulated();
-    Ctrl.UpdateWithSkeleton(TargetSkeleton->GetSkeleton(), bTransact);
 
     // For duplicated sequences, the model is already initialized; still ensure frame rate and length are consistent
     const IAnimationDataModel* SrcModel = InputAnimation->GetDataModel();
@@ -657,7 +665,8 @@ TMap<FName, TPair<FName, FName>> FRetargeterModule::GenerateRetargetChains(USkel
             if (IndexChainNameMap.Contains(CurrIdx)) {
                 // UE_LOG(Retargeter, Log, TEXT("CurrIdx: %d, ChainStartIdx: %d"), CurrIdx, ChainStartIdx);
                 // UE_LOG(Retargeter, Log, TEXT("CurrName: %s, ChainStartName: %s"),
-                //     *RefSkeleton.GetBoneName(CurrIdx).ToString(), *RefSkeleton.GetBoneName(ChainStartIdx).ToString());
+                //     *RefSkeleton.GetBoneName(CurrIdx).ToString(),
+                //     *RefSkeleton.GetBoneName(ChainStartIdx).ToString());
                 Chains.Add(FName(*IndexChainNameMap[CurrIdx]),
                     TPair<FName, FName>(*RefSkeleton.GetBoneName(CurrIdx).ToString(),
                         *RefSkeleton.GetBoneName(ChainStartIdx).ToString()));

@@ -906,7 +906,32 @@
 				"internalConsoleOptions": "openOnSessionStart",
 				"stopAtEntry": false,
 				"cwd": "/home/ljl/Documents/Applications/UnrealEngine"
-			}
+			},
+			{
+				"name": "Launch UnrealEditor-Cmd (Run RetargetAll0Commandlet)",
+				"type": "cppdbg",
+				"request": "launch",
+				"program": "/home/ljl/Documents/Applications/UnrealEngine/Engine/Binaries/Linux/UnrealEditor-Cmd",
+				"args": [
+					"/home/ljl/Documents/Unreal Projects/Retarget/Retarget.uproject",
+					"-run=Retargeter.RetargetAll0",
+					"-input=~/Downloads/step6/step6",
+					// "-LogCmds=\"global off, log RetargetAllCommandlet verbose, log Retargeter verbose\"",
+					// "-NoStdOut",
+					// "--stdout",
+					// "-NoCONSOLE",
+					"-unattended",
+				],
+				"cwd": "/home/ljl/Documents/Applications/UnrealEngine",
+				"preLaunchTask": "RetargetEditor Linux Debug Build",
+				"MIMode": "gdb",
+				"miDebuggerPath": "/usr/bin/gdb",
+				"stopAtEntry": false,
+				"sourceFileMap": {
+					"/UEVFS/Retarget": "/home/ljl/Documents/Unreal Projects/Retarget",
+					"/UEVFS/Root": "/home/ljl/Documents/Applications/UnrealEngine"
+				}
+			},
 		]
 	}
 }

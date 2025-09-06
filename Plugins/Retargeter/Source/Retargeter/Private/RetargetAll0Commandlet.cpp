@@ -125,7 +125,7 @@ void URetargetAll0Commandlet::ProcessTrainDirectory(const FString& TrainPath)
         }
     }
 
-    // Get all skeleton and animation files
+    // Get all skeleton and animation files (sorted)
     TArray<FString> SkeletonFiles = GetFBXFiles(CharacterPath);
     TArray<FString> AnimationFiles = GetFBXFiles(AnimationPath);
 
@@ -198,7 +198,7 @@ void URetargetAll0Commandlet::ProcessTestValDirectory(const FString& DirPath, co
         }
     }
 
-    // Get all skeleton and animation files
+    // Get all skeleton and animation files (sorted)
     TArray<FString> SkeletonFiles = GetFBXFiles(CharacterPath);
     TArray<FString> AnimationFiles = GetFBXFiles(AnimationPath);
 
@@ -257,6 +257,9 @@ TArray<FString> URetargetAll0Commandlet::GetFBXFiles(const FString& DirectoryPat
         File = FPaths::Combine(DirectoryPath, File);
     }
 
+    // Sort alphabetically for stable ordering
+    FbxFiles.Sort();
+
     return FbxFiles;
 }
 
@@ -267,9 +270,9 @@ TArray<FString> URetargetAll0Commandlet::GetRandomSubset(const TArray<FString>& 
     // If we need fewer items than available, randomly shuffle and take the first Count items
     if (Count < InputArray.Num()) {
         // Shuffle the array
-        for (int32 i = Result.Num() - 1; i > 0; --i) {
-            const int32 j = FMath::RandRange(0, i);
-            Result.Swap(i, j);
+            for (int32 i = Result.Num() - 1; i > 0; --i) {
+                const int32 j = FMath::RandRange(0, i);
+                Result.Swap(i, j);
         }
 
         // Take only the first Count items
