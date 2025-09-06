@@ -2,6 +2,7 @@
 
 #include "RetargetAll0Commandlet.h"
 #include "HAL/FileManager.h"
+#include "Logging/LogVerbosity.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "RetargetCommandletShared.h"
@@ -67,15 +68,14 @@ void URetargetAll0Commandlet::RetargetAllInDataset(const FString& BasePath)
     // Temporarily suppress Retargeter logs during the entire dataset retargeting.
     LOG_SCOPE_VERBOSITY_OVERRIDE(Retargeter, ELogVerbosity::NoLogging);
     // Intercept Script Msg emissions and drop Display-level entries
-    FScopedScriptExceptionHandler ScriptLogFilter([](ELogVerbosity::Type Verbosity, const TCHAR* ExceptionMessage, const TCHAR* StackMessage)
-    {
-        if (Verbosity == ELogVerbosity::Display)
-        {
-            return; // drop Display-level Script Msg
-        }
-        // Forward all other verbosities using the default logging handler
-        FScriptExceptionHandler::LoggingExceptionHandler(Verbosity, ExceptionMessage, StackMessage);
-    });
+    FScopedScriptExceptionHandler ScriptLogFilter(
+        [](ELogVerbosity::Type Verbosity, const TCHAR* ExceptionMessage, const TCHAR* StackMessage) {
+            if (Verbosity == ELogVerbosity::Display) {
+                return; // drop Display-level Script Msg
+            }
+            // Forward all other verbosities using the default logging handler
+            FScriptExceptionHandler::LoggingExceptionHandler(Verbosity, ExceptionMessage, StackMessage);
+        });
 
     // Process train, val, test directories
     TArray<FString> SubDirs = { TEXT("train"), TEXT("val"), TEXT("test") };
@@ -150,8 +150,8 @@ void URetargetAll0Commandlet::ProcessTrainDirectory(const FString& TrainPath)
         const FString& SkeletonFile = SkeletonFiles[SkeletonIdx];
         const FString SkeletonName = FPaths::GetBaseFilename(SkeletonFile);
 
-        UE_LOG(RetargetAllCommandlet, Log, TEXT("Processing skeleton %d/%d: %s"), SkeletonIdx + 1, SkeletonFiles.Num(),
-            *SkeletonName);
+        UE_LOG(RetargetAllCommandlet, Display, TEXT("Processing skeleton %d/%d: %s"), SkeletonIdx + 1,
+            SkeletonFiles.Num(), *SkeletonName);
 
         const int32 MaxAnimations = FMath::Min(100, AnimationFiles.Num());
         TArray<FString> RandomAnimations = GetRandomSubset(AnimationFiles, MaxAnimations);
@@ -225,7 +225,7 @@ void URetargetAll0Commandlet::ProcessTestValDirectory(const FString& DirPath, co
 
         UE_LOG(RetargetAllCommandlet, Display, TEXT("Processing skeleton %d/%d: %s"), SkeletonIdx + 1,
             SkeletonFiles.Num(), *SkeletonName);
-        UE_LOG(RetargetAllCommandlet, Display, TEXT("Retargeting %d animations for skeleton: %s"), AnimationFiles.Num(),
+        UE_LOG(RetargetAllCommandlet, Log, TEXT("Retargeting %d animations for skeleton: %s"), AnimationFiles.Num(),
             *SkeletonName);
 
         // Retarget each animation
