@@ -37,6 +37,16 @@ int32 URetargetAll0Commandlet::Main(const FString& Params)
     FParse::Value(*Params, TEXT("seed="), MainSeed);
     UE_LOG(RetargetAllCommandlet, Log, TEXT("Using main seed: %d"), MainSeed);
 
+    // Parse optional numworkers parameter (default to 2)
+    int32 NumWorkers = 2;
+    if (FParse::Value(*Params, TEXT("workers="), NumWorkers)) {
+        if (NumWorkers < 1) {
+            UE_LOG(RetargetAllCommandlet, Warning, TEXT("workers must be >= 1, clamping to 1 (was %d)"), NumWorkers);
+            NumWorkers = 1;
+        }
+    }
+    UE_LOG(RetargetAllCommandlet, Log, TEXT("Using num workers: %d"), NumWorkers);
+
     const FString HomeDir = FPlatformMisc::GetEnvironmentVariable(TEXT("HOME"));
     auto ExpandTilde = [&](FString& InOutPath) {
         if (HomeDir.IsEmpty()) {
@@ -65,14 +75,13 @@ int32 URetargetAll0Commandlet::Main(const FString& Params)
 
     UE_LOG(RetargetAllCommandlet, Log, TEXT("Arguments validated. Proceeding with batch retargeting..."));
 
-    RetargetAllInDataset(BasePath, MainSeed);
+    RetargetAllInDataset(BasePath, MainSeed, NumWorkers);
 
     return 0;
 }
 
-void URetargetAll0Commandlet::RetargetAllInDataset(const FString& BasePath, int32 MainSeed)
+void URetargetAll0Commandlet::RetargetAllInDataset(const FString& BasePath, int32 MainSeed, int32 NumWorkers)
 {
-    const int32 NumWorkers = 2;
     TArray<FString> SubDirs = { TEXT("train"), TEXT("val"), TEXT("test") };
 
     for (const FString& SubDir : SubDirs) {
@@ -94,7 +103,7 @@ void URetargetAll0Commandlet::RetargetAllInDataset(const FString& BasePath, int3
         }
 
         TArray<FProcHandle> WorkerProcesses;
-        UE_LOG(RetargetAllCommandlet, Log, TEXT("Spawning %d workers for directory: %s"), NumWorkers, *SubDir);
+    UE_LOG(RetargetAllCommandlet, Log, TEXT("Spawning %d workers for directory: %s"), NumWorkers, *SubDir);
 
         for (int32 i = 0; i < NumWorkers; ++i) {
             FString EditorExe = FPlatformProcess::GetApplicationName(FPlatformProcess::GetCurrentProcessId());

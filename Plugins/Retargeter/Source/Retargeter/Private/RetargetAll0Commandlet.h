@@ -22,7 +22,7 @@ public:
 	//~ End UCommandlet Interface
 
 private:
-	void RetargetAllInDataset(const FString& BasePath, int32 MainSeed);
+	void RetargetAllInDataset(const FString& BasePath, int32 MainSeed, int32 NumWorkers);
 	void ProcessTrainDirectory(const FString& TrainPath);
 	void ProcessTestValDirectory(const FString& DirPath, const FString& DirName);
 	TArray<FString> GetFBXFiles(const FString& DirectoryPath);
