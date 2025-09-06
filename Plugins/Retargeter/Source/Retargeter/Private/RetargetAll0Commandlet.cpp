@@ -70,11 +70,13 @@ void URetargetAll0Commandlet::RetargetAllInDataset(const FString& BasePath)
     const int32 NumWorkers = 2;
     TArray<FString> SubDirs = { TEXT("train"), TEXT("val"), TEXT("test") };
 
-    // Clear Retarget directories first
     for (const FString& SubDir : SubDirs) {
+        // Clear Retarget directory first
         const FString SubDirPath = FPaths::Combine(BasePath, SubDir);
-        if (!FPaths::DirectoryExists(SubDirPath))
+        if (!FPaths::DirectoryExists(SubDirPath)) {
+            UE_LOG(RetargetAllCommandlet, Warning, TEXT("Directory does not exist, skipping: %s"), *SubDirPath);
             continue;
+        }
 
         const FString RetargetPath = FPaths::Combine(SubDirPath, TEXT("Retarget"));
         if (FPaths::DirectoryExists(RetargetPath)) {
@@ -83,29 +85,25 @@ void URetargetAll0Commandlet::RetargetAllInDataset(const FString& BasePath)
         }
         if (!IFileManager::Get().MakeDirectory(*RetargetPath, true)) {
             UE_LOG(RetargetAllCommandlet, Error, TEXT("Failed to create Retarget directory: %s"), *RetargetPath);
-        }
-    }
-
-    TArray<FProcHandle> WorkerProcesses;
-
-    for (const FString& SubDir : SubDirs) {
-        const FString SubDirPath = FPaths::Combine(BasePath, SubDir);
-        if (!FPaths::DirectoryExists(SubDirPath)) {
-            UE_LOG(RetargetAllCommandlet, Warning, TEXT("Directory does not exist, skipping: %s"), *SubDirPath);
-            continue;
+            continue; // Skip this subdir if we can't create the output folder
         }
 
-        UE_LOG(RetargetAllCommandlet, Log, TEXT("Spawning workers for directory: %s"), *SubDir);
+        TArray<FProcHandle> WorkerProcesses;
+        UE_LOG(RetargetAllCommandlet, Log, TEXT("Spawning %d workers for directory: %s"), NumWorkers, *SubDir);
 
         for (int32 i = 0; i < NumWorkers; ++i) {
             FString EditorExe = FPlatformProcess::GetApplicationName(FPlatformProcess::GetCurrentProcessId());
             FString ProjectPath = FPaths::GetProjectFilePath();
+            FString LogFile = FString::Printf(TEXT("\"%sSaved/Logs/worker_%s_%d.log\""), *FPaths::ProjectDir(), *SubDir, i);
             FString Args = FString::Printf(TEXT("\"%s\" -run=RetargetWorker -input=\"%s\" -subdir=%s -workerindex=%d "
                                                 "-numworkers=%d -LogCmds=\"global off, log RetargetAllCommandlet "
                                                 "verbose\" -NoStdOut --stdout -NOCONSOLE -unattended"),
+            // FString Args = FString::Printf(TEXT("\"%s\" -run=RetargetWorker -input=\"%s\" -subdir=%s -workerindex=%d "
+            //                                     "-numworkers=%d "
+            //                                     " -NoStdOut --stdout -NOCONSOLE -unattended"),
                 *ProjectPath, *BasePath, *SubDir, i, NumWorkers);
 
-            UE_LOG(RetargetAllCommandlet, Log, TEXT("Launching worker %d with args: %s"), i, *Args);
+            UE_LOG(RetargetAllCommandlet, Log, TEXT("Launching worker %d for %s with args: %s"), i, *SubDir, *Args);
 
             FProcHandle ProcHandle
                 = FPlatformProcess::CreateProc(*EditorExe, *Args, true, false, false, nullptr, 0, nullptr, nullptr);
@@ -115,17 +113,21 @@ void URetargetAll0Commandlet::RetargetAllInDataset(const FString& BasePath)
                 UE_LOG(RetargetAllCommandlet, Error, TEXT("Failed to launch worker process %d for %s"), i, *SubDir);
             }
         }
+
+        UE_LOG(RetargetAllCommandlet, Log, TEXT("Waiting for %d worker processes for %s to complete..."), WorkerProcesses.Num(), *SubDir);
+
+        for (FProcHandle& ProcHandle : WorkerProcesses) {
+            FPlatformProcess::WaitForProc(ProcHandle);
+            int32 ReturnCode;
+            if (FPlatformProcess::GetProcReturnCode(ProcHandle, &ReturnCode)) {
+                UE_LOG(RetargetAllCommandlet, Log, TEXT("Worker process for %s finished with exit code %d"), *SubDir, ReturnCode);
+            } else {
+                UE_LOG(RetargetAllCommandlet, Warning, TEXT("Could not get return code for a worker process for %s."), *SubDir);
+            }
+            FPlatformProcess::CloseProc(ProcHandle);
+        }
+        UE_LOG(RetargetAllCommandlet, Log, TEXT("All workers for %s finished."), *SubDir);
     }
 
-    UE_LOG(RetargetAllCommandlet, Log, TEXT("Waiting for %d worker processes to complete..."), WorkerProcesses.Num());
-
-    for (FProcHandle& ProcHandle : WorkerProcesses) {
-        FPlatformProcess::WaitForProc(ProcHandle);
-        int32 ReturnCode;
-        FPlatformProcess::GetProcReturnCode(ProcHandle, &ReturnCode);
-        UE_LOG(RetargetAllCommandlet, Log, TEXT("Worker process finished with exit code %d"), ReturnCode);
-        FPlatformProcess::CloseProc(ProcHandle);
-    }
-
-    UE_LOG(RetargetAllCommandlet, Log, TEXT("All workers finished."));
+    UE_LOG(RetargetAllCommandlet, Log, TEXT("All subdirectories processed."));
 }
