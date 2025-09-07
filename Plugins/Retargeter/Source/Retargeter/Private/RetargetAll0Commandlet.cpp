@@ -108,18 +108,22 @@ void URetargetAll0Commandlet::RetargetAllInDataset(const FString& BasePath, int3
         for (int32 i = 0; i < NumWorkers; ++i) {
             FString EditorExe = FPlatformProcess::GetApplicationName(FPlatformProcess::GetCurrentProcessId());
             FString ProjectPath = FPaths::GetProjectFilePath();
-            FString LogFile = FString::Printf(TEXT("\"%sSaved/Logs/worker_%s_%d.log\""), *FPaths::ProjectDir(), *SubDir, i);
-            
+
+            const FString Suffix = FString::Printf(TEXT("%s_%d_%d"), *SubDir, i, FPlatformProcess::GetCurrentProcessId());
+            const FString UserDir = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("Saved/Workers/"), Suffix));
+            IFileManager::Get().MakeDirectory(*UserDir, /*Tree*/ true);
+
+            FString LogFile = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("Saved/Logs/"),
+                                    FString::Printf(TEXT("worker_%s_%d.log"), *SubDir, i)));
+
             // Generate unique seed for this worker using main seed and worker index
             int32 WorkerSeed = MainSeed + (i * 1000) + GetTypeHash(SubDir) % 1000;
-            
-            FString Args = FString::Printf(TEXT("\"%s\" -run=RetargetWorker -input=\"%s\" -subdir=%s -workerindex=%d "
-                                                "-numworkers=%d -seed=%d -LogCmds=\"global off, log RetargetAllCommandlet "
-                                                "verbose\" -NoStdOut --stdout -NOCONSOLE -unattended"),
-            // FString Args = FString::Printf(TEXT("\"%s\" -run=RetargetWorker -input=\"%s\" -subdir=%s -workerindex=%d "
-            //                                     "-numworkers=%d "
-            //                                     " -NoStdOut --stdout -NOCONSOLE -unattended"),
-                *ProjectPath, *BasePath, *SubDir, i, NumWorkers, WorkerSeed);
+
+            FString Args = FString::Printf(
+                TEXT("\"%s\" -run=RetargetWorker -input=\"%s\" -subdir=%s -workerindex=%d -numworkers=%d -seed=%d ")
+                TEXT("-abslog=\"%s\" -UserDir=\"%s\" -retarget_session_suffix=\"%s\" ")
+                TEXT("-LogCmds=\"global off, log RetargetAllCommandlet verbose\" -NoStdOut --stdout -NOCONSOLE -unattended"),
+                *ProjectPath, *BasePath, *SubDir, i, NumWorkers, WorkerSeed, *LogFile, *UserDir, *Suffix);
 
             UE_LOG(RetargetAllCommandlet, Log, TEXT("Launching worker %d for %s with args: %s"), i, *SubDir, *Args);
 
