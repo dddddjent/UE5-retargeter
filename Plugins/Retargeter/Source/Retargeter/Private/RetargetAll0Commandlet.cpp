@@ -17,6 +17,8 @@
 // Script exception handler (to intercept LogScript "Script Msg" output)
 #include "Misc/CoreMisc.h"
 
+#include "HAL/PlatformProcess.h"
+
 URetargetAll0Commandlet::URetargetAll0Commandlet() { LogToConsole = false; }
 
 int32 URetargetAll0Commandlet::Main(const FString& Params)
@@ -29,6 +31,21 @@ int32 URetargetAll0Commandlet::Main(const FString& Params)
         UE_LOG(RetargetAllCommandlet, Error, TEXT("Missing required argument: -input=<base folder path>"));
         return 1;
     }
+
+    // Parse optional seed parameter (default to 0)
+    int32 MainSeed = 0;
+    FParse::Value(*Params, TEXT("seed="), MainSeed);
+    UE_LOG(RetargetAllCommandlet, Log, TEXT("Using main seed: %d"), MainSeed);
+
+    // Parse optional numworkers parameter (default to 2)
+    int32 NumWorkers = 2;
+    if (FParse::Value(*Params, TEXT("workers="), NumWorkers)) {
+        if (NumWorkers < 1) {
+            UE_LOG(RetargetAllCommandlet, Warning, TEXT("workers must be >= 1, clamping to 1 (was %d)"), NumWorkers);
+            NumWorkers = 1;
+        }
+    }
+    UE_LOG(RetargetAllCommandlet, Log, TEXT("Using num workers: %d"), NumWorkers);
 
     const FString HomeDir = FPlatformMisc::GetEnvironmentVariable(TEXT("HOME"));
     auto ExpandTilde = [&](FString& InOutPath) {
@@ -58,226 +75,87 @@ int32 URetargetAll0Commandlet::Main(const FString& Params)
 
     UE_LOG(RetargetAllCommandlet, Log, TEXT("Arguments validated. Proceeding with batch retargeting..."));
 
-    RetargetAllInDataset(BasePath);
+    RetargetAllInDataset(BasePath, MainSeed, NumWorkers);
 
     return 0;
 }
 
-void URetargetAll0Commandlet::RetargetAllInDataset(const FString& BasePath)
+void URetargetAll0Commandlet::RetargetAllInDataset(const FString& BasePath, int32 MainSeed, int32 NumWorkers)
 {
-    // Temporarily suppress Retargeter logs during the entire dataset retargeting.
-    LOG_SCOPE_VERBOSITY_OVERRIDE(Retargeter, ELogVerbosity::NoLogging);
-    // Intercept Script Msg emissions and drop Display-level entries
-    FScopedScriptExceptionHandler ScriptLogFilter(
-        [](ELogVerbosity::Type Verbosity, const TCHAR* ExceptionMessage, const TCHAR* StackMessage) {
-            if (Verbosity == ELogVerbosity::Display) {
-                return; // drop Display-level Script Msg
-            }
-            // Forward all other verbosities using the default logging handler
-            FScriptExceptionHandler::LoggingExceptionHandler(Verbosity, ExceptionMessage, StackMessage);
-        });
-
-    // Process train, val, test directories
     TArray<FString> SubDirs = { TEXT("train"), TEXT("val"), TEXT("test") };
 
     for (const FString& SubDir : SubDirs) {
+        // Clear Retarget directory first
         const FString SubDirPath = FPaths::Combine(BasePath, SubDir);
-
         if (!FPaths::DirectoryExists(SubDirPath)) {
             UE_LOG(RetargetAllCommandlet, Warning, TEXT("Directory does not exist, skipping: %s"), *SubDirPath);
             continue;
         }
 
-        UE_LOG(RetargetAllCommandlet, Log, TEXT("Processing directory: %s"), *SubDir);
-
-        if (SubDir == TEXT("train")) {
-            ProcessTrainDirectory(SubDirPath);
-        } else {
-            ProcessTestValDirectory(SubDirPath, SubDir);
+        const FString RetargetPath = FPaths::Combine(SubDirPath, TEXT("Retarget"));
+        if (FPaths::DirectoryExists(RetargetPath)) {
+            UE_LOG(RetargetAllCommandlet, Log, TEXT("Clearing existing Retarget directory: %s"), *RetargetPath);
+            IFileManager::Get().DeleteDirectory(*RetargetPath, false, true);
         }
-    }
-}
-
-void URetargetAll0Commandlet::ProcessTrainDirectory(const FString& TrainPath)
-{
-    const FString CharacterPath = FPaths::Combine(TrainPath, TEXT("Character"));
-    const FString AnimationPath = FPaths::Combine(TrainPath, TEXT("Animation"));
-    const FString RetargetPath = FPaths::Combine(TrainPath, TEXT("Retarget"));
-
-    if (!FPaths::DirectoryExists(CharacterPath) || !FPaths::DirectoryExists(AnimationPath)) {
-        UE_LOG(RetargetAllCommandlet, Error, TEXT("Missing Character or Animation directory in train"));
-        return;
-    }
-
-    // Always clear any existing Retarget directory contents so we start fresh.
-    if (FPaths::DirectoryExists(RetargetPath)) {
-        UE_LOG(RetargetAllCommandlet, Log, TEXT("Clearing existing Retarget directory: %s"), *RetargetPath);
-        // Delete all files inside RetargetPath (non-recursive) and subfolders recursively.
-        IFileManager& FM = IFileManager::Get();
-        FM.DeleteDirectory(*RetargetPath, false, true);
-    }
-
-    // Create Retarget directory if it doesn't exist (or recreate after deletion)
-    if (!FPaths::DirectoryExists(RetargetPath)) {
         if (!IFileManager::Get().MakeDirectory(*RetargetPath, true)) {
             UE_LOG(RetargetAllCommandlet, Error, TEXT("Failed to create Retarget directory: %s"), *RetargetPath);
-            return;
-        }
-    }
-
-    // Get all skeleton and animation files (sorted)
-    TArray<FString> SkeletonFiles = GetFBXFiles(CharacterPath);
-    TArray<FString> AnimationFiles = GetFBXFiles(AnimationPath);
-
-    if (SkeletonFiles.Num() == 0) {
-        UE_LOG(RetargetAllCommandlet, Warning, TEXT("No skeleton files found in Character directory"));
-        return;
-    }
-
-    if (AnimationFiles.Num() == 0) {
-        UE_LOG(RetargetAllCommandlet, Warning, TEXT("No animation files found in Animation directory"));
-        return;
-    }
-
-    UE_LOG(RetargetAllCommandlet, Log, TEXT("Found %d skeletons and %d animations in train"), SkeletonFiles.Num(),
-        AnimationFiles.Num());
-
-    FRetargeterModule& Retargeter = FRetargeterModule::Get();
-    Retargeter.SetPersistAssets(false);
-
-    // For each skeleton, get 100 random animations (or all if less than 100)
-    for (int32 SkeletonIdx = 0; SkeletonIdx < SkeletonFiles.Num(); ++SkeletonIdx) {
-        const FString& SkeletonFile = SkeletonFiles[SkeletonIdx];
-        const FString SkeletonName = FPaths::GetBaseFilename(SkeletonFile);
-
-        UE_LOG(RetargetAllCommandlet, Display, TEXT("Processing skeleton %d/%d: %s"), SkeletonIdx + 1,
-            SkeletonFiles.Num(), *SkeletonName);
-
-        const int32 MaxAnimations = FMath::Min(100, AnimationFiles.Num());
-        TArray<FString> RandomAnimations = GetRandomSubset(AnimationFiles, MaxAnimations);
-        UE_LOG(RetargetAllCommandlet, Log, TEXT("Retargeting %d animations for skeleton: %s"), RandomAnimations.Num(),
-            *SkeletonName);
-
-        // Retarget each selected animation
-        for (int32 AnimIdx = 0; AnimIdx < RandomAnimations.Num(); ++AnimIdx) {
-            const FString& AnimationFile = RandomAnimations[AnimIdx];
-            const FString AnimationName = FPaths::GetBaseFilename(AnimationFile);
-            const FString PrefixedName = SkeletonName + TEXT("__") + AnimationName + TEXT(".fbx");
-            const FString OutputFile = FPaths::Combine(RetargetPath, PrefixedName);
-
-            UE_LOG(RetargetAllCommandlet, Verbose, TEXT("  Retargeting animation %d/%d: %s -> %s"), AnimIdx + 1,
-                RandomAnimations.Num(), *AnimationName, *SkeletonName);
-
-            Retargeter.RetargetAPair(AnimationFile, SkeletonFile, OutputFile);
-        }
-    }
-}
-
-void URetargetAll0Commandlet::ProcessTestValDirectory(const FString& DirPath, const FString& DirName)
-{
-    const FString CharacterPath = FPaths::Combine(DirPath, TEXT("Character"));
-    const FString AnimationPath = FPaths::Combine(DirPath, TEXT("Animation"));
-    const FString RetargetPath = FPaths::Combine(DirPath, TEXT("Retarget"));
-
-    if (!FPaths::DirectoryExists(CharacterPath) || !FPaths::DirectoryExists(AnimationPath)) {
-        UE_LOG(RetargetAllCommandlet, Error, TEXT("Missing Character or Animation directory in %s"), *DirName);
-        return;
-    }
-
-    // Always clear any existing Retarget directory contents so we start fresh.
-    if (FPaths::DirectoryExists(RetargetPath)) {
-        UE_LOG(RetargetAllCommandlet, Log, TEXT("Clearing existing Retarget directory: %s"), *RetargetPath);
-        IFileManager::Get().DeleteDirectory(*RetargetPath, false, true);
-    }
-
-    // Create Retarget directory if it doesn't exist (or recreate after deletion)
-    if (!FPaths::DirectoryExists(RetargetPath)) {
-        if (!IFileManager::Get().MakeDirectory(*RetargetPath, true)) {
-            UE_LOG(RetargetAllCommandlet, Error, TEXT("Failed to create Retarget directory: %s"), *RetargetPath);
-            return;
-        }
-    }
-
-    // Get all skeleton and animation files (sorted)
-    TArray<FString> SkeletonFiles = GetFBXFiles(CharacterPath);
-    TArray<FString> AnimationFiles = GetFBXFiles(AnimationPath);
-
-    if (SkeletonFiles.Num() == 0) {
-        UE_LOG(RetargetAllCommandlet, Warning, TEXT("No skeleton files found in %s Character directory"), *DirName);
-        return;
-    }
-
-    if (AnimationFiles.Num() == 0) {
-        UE_LOG(RetargetAllCommandlet, Warning, TEXT("No animation files found in %s Animation directory"), *DirName);
-        return;
-    }
-
-    UE_LOG(RetargetAllCommandlet, Display, TEXT("Found %d skeletons and %d animations in %s"), SkeletonFiles.Num(),
-        AnimationFiles.Num(), *DirName);
-
-    FRetargeterModule& Retargeter = FRetargeterModule::Get();
-    Retargeter.SetPersistAssets(false);
-
-    // For each skeleton, retarget ALL animations
-    for (int32 SkeletonIdx = 0; SkeletonIdx < SkeletonFiles.Num(); ++SkeletonIdx) {
-        const FString& SkeletonFile = SkeletonFiles[SkeletonIdx];
-        const FString SkeletonName = FPaths::GetBaseFilename(SkeletonFile);
-
-        UE_LOG(RetargetAllCommandlet, Display, TEXT("Processing skeleton %d/%d: %s"), SkeletonIdx + 1,
-            SkeletonFiles.Num(), *SkeletonName);
-        UE_LOG(RetargetAllCommandlet, Log, TEXT("Retargeting %d animations for skeleton: %s"), AnimationFiles.Num(),
-            *SkeletonName);
-
-        // Retarget each animation
-        for (int32 AnimIdx = 0; AnimIdx < AnimationFiles.Num(); ++AnimIdx) {
-            const FString& AnimationFile = AnimationFiles[AnimIdx];
-            const FString AnimationName = FPaths::GetBaseFilename(AnimationFile);
-            const FString PrefixedName = SkeletonName + TEXT("__") + AnimationName + TEXT(".fbx");
-            const FString OutputFile = FPaths::Combine(RetargetPath, PrefixedName);
-
-            UE_LOG(RetargetAllCommandlet, Verbose, TEXT("  Retargeting animation %d/%d: %s -> %s"), AnimIdx + 1,
-                AnimationFiles.Num(), *AnimationName, *SkeletonName);
-
-            Retargeter.RetargetAPair(AnimationFile, SkeletonFile, OutputFile);
-        }
-    }
-}
-
-TArray<FString> URetargetAll0Commandlet::GetFBXFiles(const FString& DirectoryPath)
-{
-    TArray<FString> FbxFiles;
-
-    IFileManager& FileManager = IFileManager::Get();
-    const FString SearchPattern = FPaths::Combine(DirectoryPath, TEXT("*.fbx"));
-
-    FileManager.FindFiles(FbxFiles, *SearchPattern, true, false);
-
-    // Convert relative paths to full paths
-    for (FString& File : FbxFiles) {
-        File = FPaths::Combine(DirectoryPath, File);
-    }
-
-    // Sort alphabetically for stable ordering
-    FbxFiles.Sort();
-
-    return FbxFiles;
-}
-
-TArray<FString> URetargetAll0Commandlet::GetRandomSubset(const TArray<FString>& InputArray, int32 Count)
-{
-    TArray<FString> Result = InputArray;
-
-    // If we need fewer items than available, randomly shuffle and take the first Count items
-    if (Count < InputArray.Num()) {
-        // Shuffle the array
-            for (int32 i = Result.Num() - 1; i > 0; --i) {
-                const int32 j = FMath::RandRange(0, i);
-                Result.Swap(i, j);
+            continue; // Skip this subdir if we can't create the output folder
         }
 
-        // Take only the first Count items
-        Result.SetNum(Count);
+        TArray<FProcHandle> WorkerProcesses;
+        UE_LOG(RetargetAllCommandlet, Log, TEXT("Spawning %d workers for directory: %s"), NumWorkers, *SubDir);
+
+        for (int32 i = 0; i < NumWorkers; ++i) {
+            FString EditorExe = FPlatformProcess::GetApplicationName(FPlatformProcess::GetCurrentProcessId());
+            FString ProjectPath = FPaths::GetProjectFilePath();
+
+            const FString Suffix
+                = FString::Printf(TEXT("%s_%d_%d"), *SubDir, i, FPlatformProcess::GetCurrentProcessId());
+            const FString UserDir = FPaths::ConvertRelativePathToFull(
+                FPaths::Combine(FPaths::ProjectDir(), TEXT("Saved/Workers/"), Suffix));
+            IFileManager::Get().MakeDirectory(*UserDir, /*Tree*/ true);
+
+            FString LogFile = FPaths::ConvertRelativePathToFull(FPaths::Combine(
+                FPaths::ProjectDir(), TEXT("Saved/Logs/"), FString::Printf(TEXT("worker_%s_%d.log"), *SubDir, i)));
+
+            // Generate unique seed for this worker using main seed and worker index
+            int32 WorkerSeed = MainSeed + (i * 1000) + GetTypeHash(SubDir) % 1000;
+
+            FString Args = FString::Printf(
+                TEXT("\"%s\" -run=RetargetWorker -input=\"%s\" -subdir=%s -workerindex=%d -numworkers=%d -seed=%d ")
+                    TEXT("-abslog=\"%s\" -UserDir=\"%s\" -retarget_session_suffix=\"%s\" ")
+                        TEXT("-LogCmds=\"global off, log RetargetAllCommandlet verbose\" -NoStdOut --stdout -NOCONSOLE "
+                             "-unattended"),
+                *ProjectPath, *BasePath, *SubDir, i, NumWorkers, WorkerSeed, *LogFile, *UserDir, *Suffix);
+
+            UE_LOG(RetargetAllCommandlet, Log, TEXT("Launching worker %d for %s with args: %s"), i, *SubDir, *Args);
+
+            FProcHandle ProcHandle
+                = FPlatformProcess::CreateProc(*EditorExe, *Args, true, false, false, nullptr, 0, nullptr, nullptr);
+            if (ProcHandle.IsValid()) {
+                WorkerProcesses.Add(ProcHandle);
+            } else {
+                UE_LOG(RetargetAllCommandlet, Error, TEXT("Failed to launch worker process %d for %s"), i, *SubDir);
+            }
+        }
+
+        UE_LOG(RetargetAllCommandlet, Log, TEXT("Waiting for %d worker processes for %s to complete..."),
+            WorkerProcesses.Num(), *SubDir);
+
+        for (FProcHandle& ProcHandle : WorkerProcesses) {
+            FPlatformProcess::WaitForProc(ProcHandle);
+            int32 ReturnCode;
+            if (FPlatformProcess::GetProcReturnCode(ProcHandle, &ReturnCode)) {
+                UE_LOG(RetargetAllCommandlet, Log, TEXT("Worker process for %s finished with exit code %d"), *SubDir,
+                    ReturnCode);
+            } else {
+                UE_LOG(RetargetAllCommandlet, Warning, TEXT("Could not get return code for a worker process for %s."),
+                    *SubDir);
+            }
+            FPlatformProcess::CloseProc(ProcHandle);
+        }
+        UE_LOG(RetargetAllCommandlet, Log, TEXT("All workers for %s finished."), *SubDir);
     }
 
-    return Result;
+    UE_LOG(RetargetAllCommandlet, Log, TEXT("All subdirectories processed."));
 }

@@ -16,6 +16,56 @@
 #endif
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/CommandLine.h"
+#include "HAL/PlatformProcess.h"
+#include "HAL/PlatformTime.h"
+
+#if PLATFORM_UNIX
+#  include <fcntl.h>
+#  include <unistd.h>
+#endif
+
+namespace {
+static FString GetRetargetSessionSuffix()
+{
+    FString Suffix;
+    if (!FParse::Value(FCommandLine::Get(), TEXT("retarget_session_suffix="), Suffix)) {
+        Suffix = FString::Printf(TEXT("sess_%d"), FPlatformProcess::GetCurrentProcessId());
+    }
+    return Suffix;
+}
+
+#if PLATFORM_UNIX
+// Simple lock using atomic create (O_CREAT | O_EXCL). Returns fd in OutFd when acquired.
+bool AcquireFileLock(const FString& LockFile, int MaxWaitMs, int SleepMs, int& OutFd)
+{
+    OutFd = -1;
+    FTCHARToUTF8 PathUtf8(*LockFile);
+    const char* Path = PathUtf8.Get();
+    const double Deadline = FPlatformTime::Seconds() + (MaxWaitMs / 1000.0);
+    while (FPlatformTime::Seconds() < Deadline) {
+        int fd = ::open(Path, O_CREAT | O_EXCL | O_WRONLY, 0644);
+        if (fd != -1) {
+            OutFd = fd;
+            return true;
+        }
+        FPlatformProcess::Sleep(SleepMs / 1000.0f);
+    }
+    return false;
+}
+
+void ReleaseFileLock(const FString& LockFile, int Fd)
+{
+    if (Fd != -1) {
+        ::close(Fd);
+    }
+    IFileManager::Get().Delete(*LockFile, /*RequireExists=*/false, /*EvenReadOnly=*/true);
+}
+#else
+bool AcquireFileLock(const FString&, int, int, int&) { return true; }
+void ReleaseFileLock(const FString&, int) {}
+#endif
+} // namespace
 
 // Asset import includes
 #include "Animation/AnimSequence.h"
@@ -228,7 +278,6 @@ void FRetargeterModule::SetupAnimationController(
     constexpr bool bTransact = false;
     Ctrl.UpdateWithSkeleton(TargetSkeleton->GetSkeleton(), bTransact);
 
-    // Start the edit bracket and populate
     Ctrl.OpenBracket(FText::FromString("Generating Retargeted Animation Data"), bTransact);
     Ctrl.NotifyPopulated();
 
@@ -338,6 +387,7 @@ void FRetargeterModule::CreateOutputCopy(UAnimSequence* TargetSequence)
         = MakeUniqueObjectName(GetTransientPackage(), UAnimSequence::StaticClass(), FName(*CopyBaseName));
     UAnimSequence* CopySeq = DuplicateObject<UAnimSequence>(TargetSequence, GetTransientPackage(), CopyName);
     if (CopySeq) {
+        CopySeq->WaitOnExistingCompression(true);
         CopySeq->SetSkeleton(TargetSkeleton->GetSkeleton());
         CopySeq->SetPreviewMesh(TargetSkeleton);
         outputAnimation = CopySeq;
@@ -589,17 +639,69 @@ void FRetargeterModule::LoadFBX(const FString& InputFbx, const FString& TargetFb
 {
     UE_LOG(Retargeter, Log, TEXT("loadFBX called with Input: %s, Target: %s"), *InputFbx, *TargetFbx);
 
-    // Clear existing assets
+    // Unique session dir (diagnostic separation)
+    const FString Session = GetRetargetSessionSuffix();
+    const FString SessionDir = FPaths::ProjectSavedDir() / TEXT("Interchange/Sessions/") / Session;
+    IFileManager::Get().MakeDirectory(*SessionDir, /*Tree*/ true);
+
+    // Ensure output temp folders exist
     ClearAssetsInPath(TEXT("/Game/Animations/tmp/input"));
     ClearAssetsInPath(TEXT("/Game/Animations/tmp/target"));
 
-    // Import input FBX
-    TArray<UObject*> InputAssets = ImportFBX(InputFbx, TEXT("/Game/Animations/tmp/input"));
-    ProcessImportedAssets(InputAssets, true);
+    // Lock paths
+    const FString LockDir = FPaths::ProjectSavedDir() / TEXT("Interchange/Locks");
+    IFileManager::Get().MakeDirectory(*LockDir, /*Tree*/ true);
+    const FString LockFile = LockDir / TEXT("import_global.lock");
 
-    // Import target FBX
-    TArray<UObject*> TargetAssets = ImportFBX(TargetFbx, TEXT("/Game/Animations/tmp/target"));
-    ProcessImportedAssets(TargetAssets, false);
+    int LockFd = -1;
+    const int MaxWaitMs = 10000; // 10s
+    const int SleepMs = 50;
+    const int MaxRetries = 2;
+
+    auto DoImports = [&](int Attempt)->bool {
+        // Import input FBX
+        TArray<UObject*> InputAssets = ImportFBX(InputFbx, TEXT("/Game/Animations/tmp/input"));
+        ProcessImportedAssets(InputAssets, true);
+
+        // Import target FBX
+        TArray<UObject*> TargetAssets = ImportFBX(TargetFbx, TEXT("/Game/Animations/tmp/target"));
+        ProcessImportedAssets(TargetAssets, false);
+
+        const bool bOk = (InputAnimation != nullptr) && (InputSkeleton != nullptr) && (TargetSkeleton != nullptr);
+        if (!bOk) {
+            UE_LOG(Retargeter, Warning, TEXT("LoadFBX attempt %d: missing imported assets (InputAnim=%s InputSkel=%s TargetSkel=%s)"),
+                Attempt, (InputAnimation ? TEXT("true") : TEXT("false")), (InputSkeleton ? TEXT("true") : TEXT("false")),
+                (TargetSkeleton ? TEXT("true") : TEXT("false")));
+        }
+        return bOk;
+    };
+
+    bool bImported = false;
+    for (int Attempt = 0; Attempt <= MaxRetries && !bImported; ++Attempt) {
+        if (!AcquireFileLock(LockFile, MaxWaitMs, SleepMs, LockFd)) {
+            UE_LOG(Retargeter, Warning, TEXT("LoadFBX: could not acquire Interchange lock, attempt %d (continuing without lock)"), Attempt);
+            LockFd = -1;
+        } else {
+            UE_LOG(Retargeter, Verbose, TEXT("LoadFBX: acquired Interchange lock (fd=%d)"), LockFd);
+        }
+
+        bImported = DoImports(Attempt);
+
+        // Release lock before potential retry or return
+        if (LockFd != -1) {
+            ReleaseFileLock(LockFile, LockFd);
+            LockFd = -1;
+        }
+
+        if (!bImported && Attempt < MaxRetries) {
+            const float Backoff = 0.10f + 0.15f * Attempt; // 100¨C250ms
+            FPlatformProcess::Sleep(Backoff);
+        }
+    }
+
+    if (!bImported) {
+        UE_LOG(Retargeter, Error, TEXT("LoadFBX: failed to import after %d attempts; continuing may fail downstream"), MaxRetries + 1);
+    }
 }
 
 TMap<FName, TPair<FName, FName>> FRetargeterModule::GenerateRetargetChains(USkeletalMesh* Mesh)
